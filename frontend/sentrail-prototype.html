@@ -1,0 +1,1463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sentrail · prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F3F5F6;--panel:#FFFFFF;--ink:#17212B;--ink-2:#4A5763;--ink-3:#7A8590;--line:#DCE1E5;--line-2:#C5CCD2;
+  --petrol:#0F4C5C;--petrol-soft:#E3EEF0;--high:#B3261E;--high-soft:#FBE9E7;--med:#9A6200;--med-soft:#FBF1DE;
+  --low:#2E7D4F;--low-soft:#E5F2EA;--chain:#4B3FA8;--chain-soft:#ECEAF8;--focus:#1D6FD1;
+  --sans:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#11171C;--panel:#182129;--ink:#E6EBEF;--ink-2:#AEB8C1;--ink-3:#7F8B96;--line:#27323B;--line-2:#34424D;
+  --petrol:#5FB3C4;--petrol-soft:#16313A;--high:#F08A80;--high-soft:#3A1D1B;--med:#E2B05A;--med-soft:#3A2D14;
+  --low:#78C79A;--low-soft:#173025;--chain:#A99CF2;--chain-soft:#25213F;--focus:#6AA8F0;}}
+:root[data-theme="dark"]{
+  --paper:#11171C;--panel:#182129;--ink:#E6EBEF;--ink-2:#AEB8C1;--ink-3:#7F8B96;--line:#27323B;--line-2:#34424D;
+  --petrol:#5FB3C4;--petrol-soft:#16313A;--high:#F08A80;--high-soft:#3A1D1B;--med:#E2B05A;--med-soft:#3A2D14;
+  --low:#78C79A;--low-soft:#173025;--chain:#A99CF2;--chain-soft:#25213F;--focus:#6AA8F0;}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--sans);font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:var(--mono);font-size:.86em;letter-spacing:-.01em;white-space:nowrap}
+.app{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+nav.rail{background:var(--panel);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:0 8px 18px;font-weight:700;font-size:17px;letter-spacing:-.01em}
+.brand svg{flex:none}
+.brand{padding-bottom:10px!important}
+.tenant{display:flex;gap:10px;align-items:center;margin:0 4px 12px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.tenant .av{width:32px;height:32px;border-radius:7px;display:grid;place-items:center;font-weight:700;font-size:13px;color:#fff;flex:none}
+.tenant .tn{font-weight:600;font-size:13.5px;line-height:1.25;color:var(--ink)}
+.tenant .tm{font-size:11.5px;color:var(--ink-3);display:flex;gap:6px;align-items:center;margin-top:2px;flex-wrap:wrap}
+.env{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:4px}
+.env.prod{background:var(--low-soft);color:var(--low)}.env.sandbox{background:var(--med-soft);color:var(--med)}.env.platform{background:var(--chain-soft);color:var(--chain)}
+body.sandbox .topbar{border-top:3px solid var(--med)}
+body.signedout .rail,body.signedout .topbar{display:none!important}
+body.signedout .app{grid-template-columns:1fr}
+.login{min-height:100vh;display:grid;place-items:center;padding:24px}
+.login .card{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px}
+.login .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;margin-bottom:18px}
+.login .via{font-size:12.5px;color:var(--ink-3);text-align:center;margin-top:16px}
+.login .full{width:100%;justify-content:center;display:flex;margin-top:6px}
+.demo{margin-top:18px;border-top:1px solid var(--line);padding-top:12px;font-size:12.5px;color:var(--ink-3)}
+.demo button{all:unset;cursor:pointer;display:block;padding:3px 0;color:var(--petrol)}
+.demo button:focus-visible{outline:2px solid var(--focus)}
+.idp{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:8px;margin:12px 0}
+.spin{width:18px;height:18px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--petrol);animation:spin .8s linear infinite;flex:none}
+.sess{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.sess:last-child{border-bottom:0}.sess small{color:var(--ink-3);font-size:12.5px}
+.linkbtn{all:unset;cursor:pointer;color:var(--petrol);font-weight:500;font-size:13px}
+.linkbtn:focus-visible{outline:2px solid var(--focus)}
+.navgroup:first-of-type{margin-top:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:13px;color:var(--ink-2)}
+.stat b{display:block;font-size:26px;letter-spacing:-.02em;color:var(--ink);line-height:1.2}
+.stat.warn b{color:var(--med)}.stat.bad b{color:var(--high)}
+.todo{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.todo:last-child{border-bottom:0}
+.todo:hover .t1{color:var(--petrol)}
+.todo .t1{font-weight:600}
+.todo .t2{grid-column:2;font-size:13px;color:var(--ink-2)}
+.todo .kindtag{font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--chain-soft);color:var(--chain)}
+.todo .kindtag.al{background:var(--petrol-soft);color:var(--petrol)}
+.wait{font-size:12.5px;color:var(--med);font-weight:600;text-align:right}
+.feed div{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.feed div:last-child{border-bottom:0}
+.rail button{all:unset;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border-radius:6px;color:var(--ink-2);font-weight:500}
+.rail button:hover{background:var(--paper)}
+.rail button[aria-current="page"]{background:var(--petrol-soft);color:var(--petrol)}
+.rail .count{font-size:12px;background:var(--high-soft);color:var(--high);padding:1px 7px;border-radius:10px}
+.rail .who{margin-top:auto;font-size:13px;padding:12px 10px 0;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)}
+.rail .who strong{display:block;color:var(--ink);font-weight:600}
+main{min-width:0}
+.topbar{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);padding:14px 28px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.search{flex:1 1 380px;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line-2);border-radius:8px;padding:0 10px}
+.search input{flex:1;border:0;background:transparent;padding:10px 4px;outline:none;min-width:0}
+.search:focus-within{border-color:var(--focus)}
+.kind{font-size:12px;padding:3px 8px;border-radius:5px;background:var(--paper);color:var(--ink-3);white-space:nowrap}
+.kind.wallet{background:var(--chain-soft);color:var(--chain)}
+.kind.bad{background:var(--high-soft);color:var(--high)}
+.kind.ok{background:var(--petrol-soft);color:var(--petrol)}
+select.reason{border:1px solid var(--line-2);background:var(--panel);border-radius:8px;padding:9px 8px}
+.page{padding:24px 28px 60px;max-width:1240px}
+h1{font-size:24px;letter-spacing:-.015em;margin:0 0 4px;font-weight:700}
+h2{font-size:16px;margin:0 0 12px;font-weight:600}
+.sub{color:var(--ink-2);margin:0 0 20px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))}
+.btn{border:1px solid var(--line-2);background:var(--panel);border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:500}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--petrol);border-color:var(--petrol);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#0B1A1F}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.primary{color:#0B1A1F}}
+.btn.danger{color:var(--high);border-color:var(--high)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.chip{border:1px solid var(--line-2);background:var(--panel);border-radius:20px;padding:5px 12px;cursor:pointer;font-size:13px;font-weight:500;color:var(--ink-2)}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+table{width:100%;min-width:680px;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:600;color:var(--ink-3);font-size:12.5px;padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:var(--paper)}
+.score{display:inline-flex;align-items:center;gap:8px;font-weight:700}
+.score i{display:block;width:44px;height:6px;border-radius:3px;background:var(--line);overflow:hidden;position:relative}
+.score i b{position:absolute;inset:0 auto 0 0;border-radius:3px}
+.band{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px}
+.band.high{background:var(--high-soft);color:var(--high)}.band.medium{background:var(--med-soft);color:var(--med)}.band.low{background:var(--low-soft);color:var(--low)}
+.ch{font-size:12px;padding:1px 7px;border-radius:4px;background:var(--paper);color:var(--ink-2);margin-right:4px;border:1px solid var(--line)}
+.ch.crypto{background:var(--chain-soft);color:var(--chain);border-color:transparent}
+.muted{color:var(--ink-3)}
+.casehead{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:18px}
+.dial{display:flex;align-items:center;gap:14px}
+.dial .num{font-size:44px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.facts{display:flex;gap:22px;flex-wrap:wrap;font-size:13.5px;color:var(--ink-2)}
+.facts b{display:block;white-space:nowrap;color:var(--ink);font-weight:600;font-size:14.5px}
+.reason{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.reason:last-child{border-bottom:0}
+.reason .src{grid-column:1/-1;font-size:12px;color:var(--ink-3)}
+.parts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.part{background:var(--paper);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink-2)}
+.part b{display:block;font-size:18px;color:var(--ink)}
+.bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
+.bar span{display:block;height:100%;background:var(--petrol)}
+.agent ol{list-style:none;padding:0;margin:0 0 14px}
+.agent li{display:flex;gap:10px;align-items:center;padding:5px 0;font-size:14px;color:var(--ink-3)}
+.agent li.done{color:var(--ink)}
+.agent li .dot{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line-2);flex:none;display:grid;place-items:center;font-size:10px}
+.agent li.done .dot{background:var(--low);border-color:var(--low);color:#fff}
+.agent li.run .dot{border-color:var(--petrol);border-top-color:transparent;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.agent li.run .dot{animation:none}}
+.draftnote{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--med-soft);color:var(--med);margin-left:8px;vertical-align:2px}
+.verified{font-size:13px;color:var(--low);margin-top:10px}
+.cite{color:var(--petrol);font-weight:600;cursor:help}
+.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:16px}
+.svgwrap{overflow-x:auto}
+.svgwrap svg{display:block;max-width:none}
+.trail-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3);margin-top:8px}
+.trail-legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px;background:var(--c)}
+.alertbox{border-left:4px solid var(--high);background:var(--high-soft);border-radius:0;padding:12px 16px;margin-bottom:16px}
+.alertbox.clear{border-color:var(--low);background:var(--low-soft)}
+.form-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.form-row input[type=text]{flex:1 1 320px;border:1px solid var(--line-2);background:var(--panel);border-radius:8px;padding:10px 12px}
+.err{color:var(--high);font-size:13px;margin-top:8px}
+.str-sec{margin-bottom:14px}
+.str-sec label{display:block;font-weight:600;font-size:13.5px;margin-bottom:5px}
+.str-sec textarea{width:100%;min-height:76px;border:1px solid var(--line-2);border-radius:8px;padding:10px 12px;background:var(--panel);resize:vertical;line-height:1.55}
+.str-sec textarea.flag{border-color:var(--high)}
+.evidence li{margin-bottom:8px;font-size:14px}
+.modalveil{position:fixed;inset:0;background:rgba(10,16,22,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
+.modalveil.open{display:flex}
+.modal{background:var(--panel);border-radius:12px;padding:22px;max-width:460px;width:100%;border:1px solid var(--line)}
+.modal select,.modal textarea{width:100%;margin:6px 0 12px;border:1px solid var(--line-2);border-radius:8px;padding:9px;background:var(--panel)}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:10px 16px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:30}
+.toast.show{opacity:1}
+.drop{border:1.5px dashed var(--line-2);border-radius:10px;padding:22px;text-align:center;color:var(--ink-2)}
+.backlink{all:unset;cursor:pointer;color:var(--petrol);font-weight:500;font-size:14px;margin-bottom:10px;display:inline-block}
+.menu-toggle{display:none}
+.navgroup{font-size:12px;color:var(--ink-3);margin:14px 10px 4px;font-weight:600}
+.dec{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;white-space:nowrap}
+.dec.release{background:var(--low-soft);color:var(--low)}.dec.hold{background:var(--med-soft);color:var(--med)}.dec.block{background:var(--high-soft);color:var(--high)}
+.dec.override::after{content:" · by analyst";font-weight:500}
+.livebar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.pulse{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+.pulse i{width:8px;height:8px;border-radius:50%;background:var(--low)}
+@media (prefers-reduced-motion:no-preference){.pulse i{animation:blink 1.6s ease-in-out infinite}@keyframes blink{50%{opacity:.25}}
+tr.fresh td{animation:fresh 1.6s ease-out}@keyframes fresh{from{background:var(--petrol-soft)}to{background:transparent}}}
+.dir{font-size:13px;font-weight:600}
+.dir.in{color:var(--low)}.dir.out{color:var(--chain)}
+.expo{display:flex;height:14px;border-radius:4px;overflow:hidden;margin:6px 0 10px;background:var(--line)}
+.expo span{display:block;height:100%}
+.expokey{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 14px;font-size:13px}
+.expokey div{white-space:nowrap}
+.expokey div::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:7px;background:var(--c)}
+.check{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+.check:last-child{border-bottom:0}
+.check .ic{font-weight:700}.check .ic.ok{color:var(--low)}.check .ic.no{color:var(--high)}.check .ic.warn{color:var(--med)}
+.check small{grid-column:2;color:var(--ink-3);font-size:12.5px}
+.decisionbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:16px 20px;border-radius:10px;margin-bottom:16px;border:1px solid var(--line)}
+.decisionbar.release{background:var(--low-soft)}.decisionbar.hold{background:var(--med-soft)}.decisionbar.block{background:var(--high-soft)}
+.decisionbar .big{font-size:22px;font-weight:700}
+.slider{display:grid;grid-template-columns:minmax(0,1fr) 56px;gap:6px 14px;align-items:center;margin:6px 0 16px}
+.slider input{width:100%}
+.slider output{font-weight:700;text-align:right}
+.toggle{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.toggle:last-child{border-bottom:0}
+.toggle input{margin-top:3px;width:16px;height:16px;accent-color:var(--petrol)}
+.preview{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.preview div{border-radius:8px;padding:12px;font-size:13px}
+.preview b{display:block;font-size:24px;letter-spacing:-.02em}
+@media (max-width:860px){
+  .app{grid-template-columns:1fr}
+  .rail .who{display:block!important;width:100%}
+  nav.rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line);padding:10px}
+  .brand{padding:6px 8px;width:100%}
+  .rail .who{display:none}
+  .topbar{position:static;padding:12px 16px}
+  .page{padding:18px 16px 50px}
+  .parts{grid-template-columns:1fr 1fr 1fr}
+}
+
+.rolechip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--petrol-soft);color:var(--petrol);white-space:nowrap}
+.stat-row{display:flex;gap:8px;align-items:center}
+.status{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;white-space:nowrap}
+.status.Active{background:var(--low-soft);color:var(--low)}.status.Invited,.status.Pending,.status.Trial{background:var(--med-soft);color:var(--med)}.status.Suspended{background:var(--high-soft);color:var(--high)}
+.matrix th,.matrix td{text-align:center}.matrix th:first-child,.matrix td:first-child{text-align:left}
+.matrix input{width:16px;height:16px;accent-color:var(--petrol)}
+.matrix td.grp{background:var(--paper);font-weight:600;font-size:12.5px;color:var(--ink-3);text-align:left}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:14px;font-size:14px}
+.field label{font-weight:600;font-size:13.5px}
+.field input,.field select{border:1px solid var(--line-2);border-radius:8px;padding:9px 11px;background:var(--panel)}
+.field small{color:var(--ink-3);font-size:12.5px}
+.fields2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:0 16px}
+.featrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.featrow:last-child{border-bottom:0}
+.featrow small{color:var(--ink-3);font-size:13px}
+.switch{position:relative;width:38px;height:22px;flex:none}
+.switch input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer;z-index:1}
+.switch span{position:absolute;inset:0;background:var(--line-2);border-radius:11px;transition:background .15s}
+.switch span::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch input:checked+span{background:var(--petrol)}.switch input:checked+span::after{transform:translateX(16px)}
+.switch input:focus-visible+span{outline:2px solid var(--focus);outline-offset:2px}
+.switch input:disabled+span{opacity:.45}
+.keycard{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;font-size:13px;color:var(--ink-2)}
+.keycard b{display:block;color:var(--ink);font-size:14px}
+.sod{border-left:4px solid var(--med);background:var(--med-soft);padding:10px 14px;margin-top:12px;font-size:13.5px}
+.steps{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.steps span{font-size:13px;padding:4px 10px;border-radius:14px;background:var(--paper);color:var(--ink-3);border:1px solid var(--line)}
+.steps span.on{background:var(--petrol);color:#fff;border-color:var(--petrol)}
+.steps span.done{color:var(--low);border-color:var(--low)}
+.meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:4px}
+.meter span{display:block;height:100%;transition:width .2s}
+.enrollcard{max-width:520px;margin:10px auto}
+
+.login{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px}
+.login .card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:32px 28px}
+.login .logo{display:flex;justify-content:center;margin-bottom:18px}
+.login h1{font-size:21px;text-align:center;margin:0 0 6px}
+.lsub{color:var(--ink-2);font-size:14px;text-align:center;margin:0 0 20px}
+.login .full{width:100%;justify-content:center;display:flex;margin-top:4px;padding:10px 14px}
+.lwho{display:flex;align-items:center;gap:8px;justify-content:center;margin:-4px 0 14px;font-size:13px;color:var(--ink-2)}
+.lwho .mono{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:3px 10px}
+.lback{all:unset;cursor:pointer;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:var(--ink-2);border:1px solid var(--line)}
+.lback:focus-visible{outline:2px solid var(--focus)}
+.ltenant{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:10px;margin:16px 0}
+.ltenant .av{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px;flex:none}
+.ltenant small{display:block;color:var(--ink-3);font-size:12.5px}
+.lor{display:flex;align-items:center;gap:10px;margin:16px 0 10px;font-size:12.5px;color:var(--ink-3)}
+.lor::before,.lor::after{content:"";flex:1;height:1px;background:var(--line)}
+.lforgot{display:block;margin:14px auto 0}
+.login .via{font-size:12px;color:var(--ink-3);margin:0}
+.demo{margin-top:22px;border-top:1px solid var(--line);padding-top:12px;font-size:13px}
+.demo summary{cursor:pointer;color:var(--petrol);font-weight:500;text-align:center}
+.demo .dg{font-size:12px;color:var(--ink-3);font-weight:600;margin:12px 0 2px}
+.demo button{all:unset;cursor:pointer;display:flex;justify-content:space-between;gap:8px;width:100%;padding:5px 6px;border-radius:6px;box-sizing:border-box}
+.demo button:hover{background:var(--paper)}.demo button:focus-visible{outline:2px solid var(--focus)}
+.demo button small{color:var(--ink-3);white-space:nowrap}
+.demo p{color:var(--ink-3);font-size:12px;margin:10px 0 0}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:8px;overflow:hidden;margin-bottom:16px}
+.seg button{all:unset;cursor:pointer;padding:7px 14px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+.seg button:focus-visible{outline:2px solid var(--focus)}
+.planchip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--chain-soft);color:var(--chain)}
+.note{border-left:4px solid var(--chain);background:var(--chain-soft);padding:10px 14px;font-size:13.5px;margin-bottom:14px}
+.tmpl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.tmpl div{border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink-2)}
+.tmpl b{display:block;color:var(--ink);font-size:14px}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Main">
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><path d="M14 2l10 4v7c0 6.5-4.3 11.2-10 13-5.7-1.8-10-6.5-10-13V6z" fill="var(--petrol)"/><path d="M9 17l4-5 3 3 4-5" fill="none" stroke="var(--panel)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="10" r="1.8" fill="var(--panel)"/></svg>
+      <span>Sentrail</span>
+    </div>
+    <div class="tenant" id="tenant" aria-label="Current organization"></div>
+    <button data-go="today" data-perm="cases.view">Today <span class="count" id="todoCount">0</span></button>
+    <p class="navgroup" data-perm="cases.view">Monitor</p>
+    <button data-go="live" data-perm="cases.view">Live screening <span class="count" id="heldCount">0</span></button>
+    <button data-go="queue" data-perm="cases.view">Alerts <span class="count" id="openCount">0</span></button>
+    <p class="navgroup" data-perm="wallet.trace">Investigate</p>
+    <button data-go="wallet" data-perm="wallet.trace">Wallet trace</button>
+    <button data-go="wallets" data-perm="wallet.trace">Customer wallets</button>
+    <button data-go="upload" data-perm="cases.decide">Statements</button>
+    <p class="navgroup" data-perm="cases.view">Govern</p>
+    <button data-go="reports" data-perm="cases.view">Reports</button>
+    <button data-go="policy" data-perm="cases.view">Screening policy</button>
+    <button data-go="audit" data-perm="audit.view">Audit log</button>
+    <p class="navgroup" data-perm-any="orgs.manage,platform.support">Tenants</p>
+    <button data-go="orgs" data-perm-any="orgs.manage,platform.support">Organizations</button>
+    <p class="navgroup" data-perm-any="users.manage,roles.manage,features.manage,platform.users.manage,platform.roles.manage,platform.plans.manage,platform.security.manage">Administration</p>
+    <button data-go="users" data-perm-any="users.manage,platform.users.manage,platform.support" id="nav-users">Users and invitations</button>
+    <button data-go="roles" data-perm-any="roles.manage,platform.roles.manage">Roles and permissions</button>
+    <button data-go="features" data-perm-any="features.manage,platform.plans.manage" id="nav-features">Features</button>
+    <button data-go="security" data-perm-any="users.manage,platform.security.manage">Security</button>
+    <button data-go="adminaudit" data-perm="platform.audit.view">Platform audit</button>
+    <div class="who"><label for="persona">Signed in as (demo switch)</label>
+      <select id="persona" class="reason" style="width:100%;margin-top:4px"></select>
+      <div id="orgline" style="margin-top:6px"></div>
+      <div style="display:flex;gap:14px;margin-top:8px"><button class="linkbtn" data-go="account">My account</button><button class="linkbtn" id="signout">Sign out</button></div></div>
+  </nav>
+  <main>
+    <div class="topbar" data-perm="cases.view">
+      <div class="search">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="var(--ink-3)" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="var(--ink-3)" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <input id="q" type="text" aria-label="Search" placeholder="Customer ID, account, card last 4, wallet address or transaction hash" autocomplete="off">
+        <span class="kind" id="qkind">Type to search</span>
+      </div>
+      <select class="reason" id="qreason" aria-label="Reason for lookup">
+        <option value="">Reason for lookup</option>
+        <option>Alert investigation</option><option>Law enforcement request</option>
+        <option>Customer complaint</option><option>Periodic review</option>
+      </select>
+      <button class="btn primary" id="qgo">Search</button>
+    </div>
+    <div class="page" id="view"></div>
+  </main>
+</div>
+
+<div class="modalveil" id="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+  <div class="modal">
+    <h2 id="mtitle">Record decision</h2>
+    <label for="mdecision" class="muted" style="font-size:13px">Decision</label>
+    <select id="mdecision">
+      <option value="file_str">File STR</option>
+      <option value="false_positive">Close as false positive</option>
+      <option value="request_info">Request information from customer</option>
+      <option value="escalate">Escalate to senior officer</option>
+    </select>
+    <label for="mreason" class="muted" style="font-size:13px">Reason (saved to the audit log)</label>
+    <textarea id="mreason" rows="3" placeholder="Activity is consistent with money mule indicators and the customer's profile doesn't explain the volume."></textarea>
+    <div class="err" id="merr" hidden>Add a reason before saving.</div>
+    <div class="actions"><button class="btn" id="mcancel">Cancel</button><button class="btn primary" id="msave">Save decision</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmt = n => n.toLocaleString("en-CA",{maximumFractionDigits:0});
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function seeded(str){let h=2166136261;for(const c of str)h=Math.imul(h^c.charCodeAt(0),16777619);return()=>{h=Math.imul(h^(h>>>15),2246822507);h=Math.imul(h^(h>>>13),3266489909);return((h^=h>>>16)>>>0)/4294967296}}
+function fakeTron(r){let s="T";for(let i=0;i<33;i++)s+=B58[Math.floor(r()*58)];return s}
+const short = a => a.length>16 ? a.slice(0,6)+"…"+a.slice(-5) : a;
+
+const CASE_WALLET = "TQ7mWx3ZkP9vRb2LnH8sYcD4fGu6JtA1Ke";
+const state = {
+  analyst:"Ansuman P.",
+  alerts:[
+    {id:"A-1042",cid:"C-2291",name:"Rohan M.",score:87,band:"high",channels:["bank","crypto"],reason:"12 new senders in 5 days, then funds sent to a crypto wallet",status:"open",age:"2h"},
+    {id:"A-1039",cid:"C-1877",name:"Priya S.",score:81,band:"high",channels:["bank"],reason:"4 deposits just below 10,000 in 6 days",status:"open",age:"5h"},
+    {id:"A-1051",cid:"C-3310",name:"Kestrel Imports Ltd.",score:76,band:"high",channels:["bank","card"],reason:"Payments routed through a loop of 4 accounts",status:"open",age:"1h"},
+    {id:"A-1033",cid:"C-0954",name:"Daniel O.",score:64,band:"medium",channels:["card"],reason:"71% of card spend at gift card and gambling merchants",status:"open",age:"1d"},
+    {id:"A-1047",cid:"C-2048",name:"Meera K.",score:58,band:"medium",channels:["crypto"],reason:"USDT withdrawal to a wallet first seen 2 days ago",status:"open",age:"3h"},
+    {id:"A-1028",cid:"C-1402",name:"Lucas B.",score:52,band:"medium",channels:["bank"],reason:"Account dormant 140 days, then 18,400 moved",status:"open",age:"2d"},
+    {id:"A-1044",cid:"C-0771",name:"Anika T.",score:34,band:"low",channels:["bank"],reason:"Volume 2.1x declared income after salary change",status:"open",age:"6h"},
+    {id:"A-1036",cid:"C-2655",name:"Farid H.",score:29,band:"low",channels:["card","bank"],reason:"Travel spend in 3 countries in one week",status:"open",age:"1d"}
+  ],
+  audit:[], filter:"all", agentRun:{}, decisions:{}
+};
+const CASES = {
+  "C-2291":{profile:{occupation:"Student",income:"4,000 / month",kyc:"Medium",since:"Mar 2025",country:"Canada"},
+    parts:{rules:80,model:91,network:88},
+    reasons:[
+      {src:"Model",text:"Volume is 8.2x the declared income",share:35},
+      {src:"Rule: fan-in",text:"12 different senders in 5 days, 9 of them accounts opened in the last 30 days",share:28},
+      {src:"Rule: structuring",text:"4 deposits between 9,500 and 9,900",share:22},
+      {src:"Network",text:"Funds reached a listed wallet 2 hops after leaving this account",share:15}],
+    txns:[
+      ["Sep 2 09:14","in","bank",9850,"Transfer from ACC…4471"],["Sep 2 15:40","in","bank",3200,"Transfer from ACC…8812"],
+      ["Sep 3 10:02","in","bank",9600,"Transfer from ACC…1903"],["Sep 3 18:21","out","card",84,"Card ••4417, grocery"],
+      ["Sep 4 11:47","in","bank",9900,"Transfer from ACC…5520"],["Sep 5 08:30","in","bank",9500,"Transfer from ACC…3367"],
+      ["Sep 5 21:12","in","bank",5350,"8 smaller transfers, 8 senders"],["Sep 6 09:05","out","crypto",46000,"Bought USDT, sent to "+short(CASE_WALLET)]],
+    summary:'Between 2 and 6 September the customer received 48,200 from 12 accounts, 9 of which were opened in the last 30 days. Four deposits fell between 9,500 and 9,900. On 6 September, 46,000 was converted to USDT and withdrawn to an external TRON wallet. Two hops later, the funds reached a wallet on the institution\'s blocklist. The customer is a student with declared income of 4,000 a month, so the volume isn\'t explained by the profile. The pattern matches money mule indicators <span class="cite" title="FINTRAC STR guidance, ML indicators section">[1]</span> and virtual asset red flags <span class="cite" title="FATF red flag indicators for virtual assets">[2]</span>.',
+    figures:6},
+};
+function genericCase(a){
+  const r=seeded(a.cid);
+  const sx=a.src&&SCR.find(x=>x.id===a.src);
+  if(sx){const rs=whyOf(sx).concat(sx.signals).slice(0,4), sh=[46,28,16,10];
+    return {profile:{occupation:["Engineer","Retail worker","Business owner","Consultant"][Math.floor(r()*4)],income:fmt(3000+Math.floor(r()*9000))+" / month",kyc:"Medium",since:"2024",country:"Canada"},
+      parts:{rules:sx.sanction?100:Math.min(99,sx.score+5),model:sx.score,network:Math.min(99,sx.expo.scam+sx.expo.sanctioned+20)},
+      reasons:rs.map((t,i)=>({src:i<whyOf(sx).length?"Screening decision":"Wallet behaviour",text:t,share:sh[i]})),
+      txns:[["Today "+sx.t.slice(0,5),sx.dir,"crypto",sx.amt,`${sx.asset} on ${sx.net}, ${sx.dir==="in"?"from":"to"} ${short(sx.wallet)} (${DEC_LABEL[decisionOf(sx)].toLowerCase()} at screening)`]],
+      summary:`Screening ${decisionOf(sx)==="block"?"blocked":"held"} a ${fmt(sx.amt)} ${sx.asset} ${sx.dir==="in"?"deposit from":"withdrawal to"} a ${sx.host.toLowerCase()} wallet. ${sx.expo.sanctioned?sx.expo.sanctioned+"% of the wallet's funds trace to a sanctioned address. ":""}${sx.expo.scam?sx.expo.scam+"% trace to reported scam wallets. ":""}${sx.signals[0]?sx.signals[0]+". ":""}Review the wallet trail and the customer's history before deciding.`,figures:2,wallet:sx.wallet};}
+  return {profile:{occupation:["Engineer","Retail worker","Business owner","Consultant"][Math.floor(r()*4)],income:fmt(3000+Math.floor(r()*9000))+" / month",kyc:a.band==="high"?"Medium":"Low",since:"2024",country:"Canada"},
+    parts:{rules:Math.round(a.score*0.9),model:Math.min(99,a.score+4),network:Math.max(10,a.score-12)},
+    reasons:[{src:"Main finding",text:a.reason,share:46},{src:"Model",text:"30-day volume above the customer's normal range",share:31},{src:"Model",text:"More new counterparties than usual",share:23}],
+    txns:[["Sep 1 10:12","in","bank",4200,"Transfer received"],["Sep 3 13:30","out",a.channels.includes("card")?"card":"bank",1250,"Payment sent"],["Sep 4 16:45","in","bank",6800,"Transfer received"]],
+    summary:"The main finding is: "+a.reason.toLowerCase()+". The rest of the account history is broadly in line with the customer's profile. Review the transactions before deciding whether this needs a report.",figures:3};
+}
+const caseOf = a => CASES[a.cid] || genericCase(a);
+
+function log(action,target,detail=""){state.audit.unshift({at:new Date().toLocaleTimeString("en-CA",{hour:"2-digit",minute:"2-digit"}),user:PERSONA().name,action,target,detail});}
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2400)}
+const scoreCell = (s,b) => `<span class="score">${s}<i><b style="width:${s}%;background:var(--${b==="high"?"high":b==="medium"?"med":"low"})"></b></i></span>`;
+const chans = cs => cs.map(c=>`<span class="ch ${c}">${c==="crypto"?"Crypto":c==="card"?"Card":"Bank"}</span>`).join("");
+
+/* ---------- Routing ---------- */
+let route={name:"today"};
+function go(name,arg){route={name,arg};render();window.scrollTo(0,0)}
+document.querySelectorAll("[data-go]").forEach(b=>b.addEventListener("click",()=>go(b.dataset.go)));
+function render(){
+  if(!signedIn){renderLogin();return}
+  if(!routeAllowed(route.name)){route={name:firstAllowed()}}
+  document.querySelectorAll("[data-go]").forEach(b=>b.setAttribute("aria-current",b.dataset.go===route.name||(route.name==="case"&&b.dataset.go==="queue")||(route.name==="str"&&b.dataset.go==="reports")||(route.name==="shot"&&b.dataset.go==="live")?"page":"false"));
+  $("#openCount").textContent=state.alerts.filter(a=>a.status==="open").length;
+  if(!can("cases.view")){ $("#todoCount").textContent=0; }
+  const todo=can("cases.view")?todoItems():[]; $("#todoCount").textContent=todo.length;
+  $("#heldCount").textContent=SCR.filter(x=>decisionOf(x)==="hold"&&!x.override).length;
+  ({account:renderAccount,orgs:renderOrgs,users:renderUsers,roles:renderRoles,features:renderFeatures,security:renderSecurity,adminaudit:renderAdminAudit,enroll:renderEnroll,denied:renderDenied,today:renderToday,live:renderLive,shot:renderShot,wallets:renderWallets,policy:renderPolicy,queue:renderQueue,case:renderCase,wallet:renderWallet,str:renderSTR,reports:renderReports,upload:renderUpload,audit:renderAudit})[route.name]();
+}
+
+/* ---------- Queue ---------- */
+function renderQueue(){
+  const open=state.alerts.filter(a=>a.status==="open");
+  const n=b=>open.filter(a=>a.band===b).length;
+  const list=open.filter(a=>state.filter==="all"||a.band===state.filter).sort((a,b)=>b.score-a.score);
+  $("#view").innerHTML=`
+    <h1>Alerts</h1>
+    <p class="sub">Alerts are scored automatically from bank, card and crypto activity. Highest risk is at the top.</p>
+    <div class="chips" role="group" aria-label="Filter by risk">
+      ${[["all","All open",open.length],["high","High",n("high")],["medium","Medium",n("medium")],["low","Low",n("low")]].map(([k,l,c])=>`<button class="chip" aria-pressed="${state.filter===k}" data-f="${k}">${l} · ${c}</button>`).join("")}
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Score</th><th>Risk</th><th>Customer</th><th>Main reason</th><th>Channels</th><th>Raised</th></tr></thead>
+      <tbody>${list.map(a=>`<tr class="click" tabindex="0" data-id="${a.id}">
+        <td>${scoreCell(a.score,a.band)}</td><td><span class="band ${a.band}">${a.band[0].toUpperCase()+a.band.slice(1)}</span></td>
+        <td><b>${a.name}</b><div class="muted mono">${a.cid}</div></td><td style="max-width:340px">${a.reason}</td><td>${chans(a.channels)}</td><td class="muted">${a.age} ago</td></tr>`).join("")
+        || `<tr><td colspan="6" class="muted">No open alerts at this risk level.</td></tr>`}</tbody>
+    </table></div>`;
+  document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{state.filter=b.dataset.f;renderQueue()});
+  document.querySelectorAll("tr[data-id]").forEach(r=>{const open=()=>go("case",r.dataset.id);r.onclick=open;r.onkeydown=e=>{if(e.key==="Enter")open()}});
+}
+
+/* ---------- Case ---------- */
+function renderCase(){
+  const a=state.alerts.find(x=>x.id===route.arg); const c=caseOf(a);
+  log("Viewed case",a.id);
+  const ran=state.agentRun[a.id];
+  $("#view").innerHTML=`
+    <button class="backlink" data-back>← Alerts</button>
+    <div class="casehead">
+      <div><h1>${a.name}</h1>
+        <div class="facts" style="margin-top:8px">
+          <div>Customer<b class="mono">${a.cid}</b></div><div>Occupation<b>${c.profile.occupation}</b></div>
+          <div>Declared income<b>${c.profile.income}</b></div><div>KYC risk<b>${c.profile.kyc}</b></div><div>Customer since<b>${c.profile.since}</b></div>
+        </div></div>
+      <div class="dial"><div class="num" style="color:var(--${a.band==="high"?"high":a.band==="medium"?"med":"low"})">${a.score}</div>
+        <div><span class="band ${a.band}">${a.band[0].toUpperCase()+a.band.slice(1)} risk</span><div class="muted" style="font-size:13px;margin-top:4px">Alert ${a.id} · ${a.status==="open"?"Open":a.status}</div></div></div>
+    </div>
+    <div class="grid g2">
+      <section class="panel"><h2>Why this was flagged</h2>
+        ${c.reasons.map(r=>`<div class="reason"><span>${r.text}</span><b>${r.share}%</b><span class="src">${r.src}</span></div>`).join("")}
+        <div class="parts">${[["Rules",c.parts.rules],["Behaviour model",c.parts.model],["Money network",c.parts.network]].map(([l,v])=>`<div class="part">${l}<b>${v}</b><div class="bar"><span style="width:${v}%"></span></div></div>`).join("")}</div>
+      </section>
+      <section class="panel"><h2>Money flow</h2>${flowSVG(a,c)}
+        <div class="trail-legend"><span style="--c:var(--ink-3)">Senders</span><span style="--c:var(--med)">This customer</span><span style="--c:var(--chain)">Crypto wallet</span><span style="--c:var(--high)">Listed wallet</span></div>
+        ${a.cid==="C-2291"||c.wallet?`<div class="actions" style="justify-content:flex-start"><button class="btn" data-trace>Trace the ${c.wallet?"counterparty":"withdrawal"} wallet</button></div>`:""}
+      </section>
+    </div>
+    <section class="panel" style="margin-top:16px"><h2>Activity across bank, card and crypto</h2>
+      <div class="chips" role="group" aria-label="Filter activity">${["All","Bank","Card","Crypto"].map((k,i)=>`<button class="chip" aria-pressed="${i===0}" data-tf="${k.toLowerCase()}">${k}</button>`).join("")}</div>
+      <div class="tablewrap" style="border:0"><table><thead><tr><th>When</th><th>Direction</th><th>Channel</th><th style="text-align:right">Amount (CAD)</th><th>Details</th></tr></thead>
+      <tbody id="txbody"></tbody></table></div>
+    </section>
+    <section class="panel agent" style="margin-top:16px"><h2>AI investigation ${ran?'<span class="draftnote">Draft · needs your review</span>':""}</h2>
+      <div id="agentArea">${ran?agentDone(a,c):`<p class="muted" style="margin-top:0">The assistant runs on a local open-source model. Personal data is masked before analysis and every figure is checked against the transaction records.</p><button class="btn primary" data-perm="str.draft" data-run>Run investigation</button>`}</div>
+    </section>
+    <div class="actions">
+      <button class="btn" data-perm="cases.decide" data-decide="request_info">Request info from customer</button>
+      <button class="btn" data-perm="cases.decide" data-decide="false_positive">Close as false positive</button>
+      <button class="btn primary" data-perm="str.draft" data-str ${ran?"":"disabled title='Run the investigation first'"} style="${ran?"":"opacity:.5"}">Draft STR</button>
+    </div>`;
+  const tx=f=>$("#txbody").innerHTML=c.txns.filter(t=>f==="all"||t[2]===f).map(t=>`<tr><td class="muted">${t[0]}</td><td>${t[1]==="in"?"Received":"Sent"}</td><td>${chans([t[2]])}</td><td style="text-align:right;font-weight:600">${t[1]==="in"?"+":"−"}${fmt(t[3])}</td><td>${t[4]}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No ${f} activity in the last 90 days.</td></tr>`;
+  tx("all");
+  document.querySelectorAll("[data-tf]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tf]").forEach(x=>x.setAttribute("aria-pressed",x===b));tx(b.dataset.tf)});
+  $("[data-back]").onclick=()=>go("queue");
+  const tr=$("[data-trace]"); if(tr) tr.onclick=()=>go("wallet",c.wallet||CASE_WALLET);
+  const run=$("[data-run]"); if(run) run.onclick=()=>runAgent(a,c);
+  document.querySelectorAll("[data-decide]").forEach(b=>b.onclick=()=>openDecision(a,b.dataset.decide));
+  const s=$("[data-str]"); if(s&&ran) s.onclick=()=>go("str",a.id);
+}
+function flowSVG(a,c){
+  const n=a.cid==="C-2291"?12:5, W=440,H=190, cx=210, cy=95;
+  let s=`<div class="svgwrap"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Money flows from ${n} senders into the customer${a.cid==="C-2291"?" and out to a crypto wallet that reaches a listed wallet":""}">`;
+  for(let i=0;i<n;i++){const y=12+i*(H-24)/(n-1);s+=`<path d="M28 ${y} C120 ${y} 120 ${cy} ${cx-16} ${cy}" fill="none" stroke="var(--line-2)" stroke-width="${i<4?2.2:1}"/><circle cx="22" cy="${y}" r="6" fill="var(--panel)" stroke="var(--ink-3)"/>`}
+  if(a.cid==="C-2291"){
+    s+=`<path d="M${cx+16} ${cy} L${cx+104} ${cy}" stroke="var(--chain)" stroke-width="4"/><path d="M${cx+124} ${cy} L${W-36} ${cy}" stroke="var(--high)" stroke-width="3" stroke-dasharray="5 4"/>
+    <circle cx="${cx+114}" cy="${cy}" r="11" fill="var(--chain-soft)" stroke="var(--chain)" stroke-width="2"/><circle cx="${W-24}" cy="${cy}" r="12" fill="var(--high-soft)" stroke="var(--high)" stroke-width="2"/>
+    <text x="${cx+114}" y="${cy+30}" text-anchor="middle" font-size="11" fill="var(--ink-2)">USDT wallet</text><text x="${W-24}" y="${cy+30}" text-anchor="middle" font-size="11" fill="var(--high)">Listed</text>
+    <text x="${cx+60}" y="${cy-12}" text-anchor="middle" font-size="11" fill="var(--chain)">46,000</text><text x="${W-80}" y="${cy-12}" text-anchor="middle" font-size="11" fill="var(--high)">2 hops</text>`;
+  }
+  s+=`<circle cx="${cx}" cy="${cy}" r="16" fill="var(--med-soft)" stroke="var(--med)" stroke-width="2"/><text x="${cx}" y="${cy+34}" text-anchor="middle" font-size="11" fill="var(--ink-2)">${a.cid}</text></svg></div>`;
+  return s;
+}
+const STEPS=["Masked personal data before analysis","Summarized 90 days of account activity","Found 4 relevant guidance passages","Wrote case summary","Drafted STR narrative","Checked figures against transaction data","Restored personal data for your view"];
+function runAgent(a,c){
+  const area=$("#agentArea");
+  area.innerHTML=`<ol>${STEPS.map((s,i)=>`<li id="st${i}"><span class="dot"></span>${s}</li>`).join("")}</ol>`;
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let i=0; const tick=()=>{ if(i>0){const p=$("#st"+(i-1));p.className="done";p.querySelector(".dot").textContent="✓"}
+    if(i<STEPS.length){$("#st"+i).className="run";i++;setTimeout(tick,reduce?60:420)} else {state.agentRun[a.id]=true;log("Ran AI investigation",a.id,STEPS.length+" steps");renderCase()} };
+  tick();
+}
+function agentDone(a,c){
+  return `<ol>${STEPS.map(s=>`<li class="done"><span class="dot">✓</span>${s}</li>`).join("")}</ol>
+  <p style="margin:0;max-width:78ch">${c.summary}</p>
+  <div class="verified">✓ All ${c.figures} figures match the transaction records</div>`;
+}
+
+/* ---------- Wallet trace ---------- */
+function buildTrace(addr){
+  const r=seeded(addr), isCase=addr===CASE_WALLET;
+  const h1=Array.from({length:isCase?3:3+Math.floor(r()*2)},()=>({id:fakeTron(r),amt:0}));
+  let total=isCase?46000:Math.round(5000+r()*60000); let left=total;
+  h1.forEach((n,i)=>{n.amt=i===h1.length-1?left:Math.round(left*(0.45+r()*0.2));left-=n.amt});
+  const h2=[]; h1.forEach((p,i)=>{const k=1+Math.floor(r()*2);for(let j=0;j<k;j++)h2.push({id:fakeTron(r),from:p.id,amt:Math.round(p.amt*(k===1?0.95:0.5)),flag:false})});
+  const flagIt = isCase || r()<0.4;
+  if(flagIt){h2[0].flag=true;h2[0].label=isCase?"Reported investment scam cluster":"OFAC sanctioned address";h2[0].source=isCase?"Internal blocklist":"OFAC SDN (verify on the official OFAC search)";}
+  return {addr,network:"TRON · USDT",total,senders:isCase?1:2+Math.floor(r()*6),firstSeen:isCase?"4 Sep 2026":(1+Math.floor(r()*27))+" Aug 2026",h1,h2,hit:h2.find(x=>x.flag)};
+}
+function renderWallet(){
+  const addr=route.arg||"";
+  $("#view").innerHTML=`
+    <h1>Wallet trace</h1>
+    <p class="sub">Paste any TRON, Ethereum or Bitcoin address. Blockchain data is public, so this works for wallets outside your customer base too.</p>
+    <div class="panel"><div class="form-row">
+      <input type="text" id="waddr" class="mono" aria-label="Wallet address" placeholder="${CASE_WALLET}" value="${addr}">
+      <select id="whops" class="reason" aria-label="Hops"><option value="2">Follow 2 hops</option><option value="1">Follow 1 hop</option></select>
+      <button class="btn primary" id="wgo">Trace wallet</button></div>
+      <div class="err" id="werr" hidden></div>
+      <p class="muted" style="font-size:13px;margin:10px 0 0">This prototype uses demo data. The backend fetches live transfers from TronGrid, Etherscan and mempool.space and screens every wallet against OFAC and your own blocklist.</p>
+    </div><div id="wout"></div>`;
+  const runT=()=>{const v=$("#waddr").value.trim(),e=$("#werr");
+    if(!v){e.textContent="Enter a wallet address first.";e.hidden=false;return}
+    const k=classify(v); if(k.kind!=="wallet"){e.textContent="That doesn't look like a TRON (T…), Ethereum (0x…) or Bitcoin address.";e.hidden=false;return}
+    e.hidden=true; showTrace(buildTrace(v),+$("#whops").value); log("Traced wallet",short(v),k.label)};
+  $("#wgo").onclick=runT; $("#waddr").addEventListener("input",()=>$("#werr").hidden=true);
+  $("#waddr").addEventListener("keydown",e=>{if(e.key==="Enter")runT()});
+  if(addr) runT();
+}
+function showTrace(t,hops){
+  const h2=hops===2?t.h2:[]; const hit=hops===2?t.hit:null;
+  const W=760,H=Math.max(280,Math.max(t.h1.length,h2.length)*78+50), col=[70,330,600];
+  const y=(i,n)=>H/2+(i-(n-1)/2)*78;
+  const maxA=t.total; const w=a=>1+7*a/maxA;
+  let s=`<div class="svgwrap"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Money trail from the traced wallet across ${hops} hops">`;
+  t.h1.forEach((n,i)=>{const yy=y(i,t.h1.length);s+=`<path d="M${col[0]+14} ${H/2} C${col[0]+130} ${H/2} ${col[1]-130} ${yy} ${col[1]-12} ${yy}" fill="none" stroke="var(--chain)" stroke-opacity=".55" stroke-width="${w(n.amt)}"/>`});
+  h2.forEach((n,i)=>{const p=t.h1.findIndex(x=>x.id===n.from),y1=y(p,t.h1.length),y2=y(i,h2.length);
+    s+=`<path d="M${col[1]+12} ${y1} C${col[1]+130} ${y1} ${col[2]-130} ${y2} ${col[2]-12} ${y2}" fill="none" stroke="${n.flag?"var(--high)":"var(--chain)"}" stroke-opacity="${n.flag?1:.4}" stroke-width="${w(n.amt)}" ${n.flag?'stroke-dasharray="6 4"':""}/>`});
+  s+=`<circle cx="${col[0]}" cy="${H/2}" r="14" fill="var(--med-soft)" stroke="var(--med)" stroke-width="2"/><text x="${col[0]}" y="${H/2+32}" text-anchor="middle" font-size="12" fill="var(--ink)" font-family="var(--mono)">${short(t.addr)}</text><text x="${col[0]}" y="${H/2+48}" text-anchor="middle" font-size="11" fill="var(--ink-3)">Traced wallet</text>`;
+  t.h1.forEach((n,i)=>{const yy=y(i,t.h1.length);s+=`<circle cx="${col[1]}" cy="${yy}" r="10" fill="var(--chain-soft)" stroke="var(--chain)" stroke-width="1.5"/><text x="${col[1]}" y="${yy+26}" text-anchor="middle" font-size="11.5" fill="var(--ink)" font-family="var(--mono)">${short(n.id)}</text><text x="${col[1]}" y="${yy+40}" text-anchor="middle" font-size="11" fill="var(--ink-3)">${fmt(n.amt)} USDT</text>`});
+  h2.forEach((n,i)=>{const yy=y(i,h2.length);s+=`<circle cx="${col[2]}" cy="${yy}" r="${n.flag?12:9}" fill="${n.flag?"var(--high-soft)":"var(--chain-soft)"}" stroke="${n.flag?"var(--high)":"var(--chain)"}" stroke-width="${n.flag?2:1.5}"/><text x="${col[2]+18}" y="${yy-6}" font-size="11.5" fill="${n.flag?"var(--high)":"var(--ink)"}" font-family="var(--mono)">${short(n.id)}</text><text x="${col[2]+18}" y="${yy+10}" font-size="11" fill="${n.flag?"var(--high)":"var(--ink-3)"}">${n.flag?"Listed · ":""}${fmt(n.amt)} USDT</text>`});
+  s+=`<text x="${col[1]}" y="16" text-anchor="middle" font-size="12" fill="var(--ink-3)">Hop 1</text>${hops===2?`<text x="${col[2]}" y="16" text-anchor="middle" font-size="12" fill="var(--ink-3)">Hop 2</text>`:""}</svg></div>`;
+  $("#wout").innerHTML=`
+    <div style="margin-top:16px" class="alertbox ${hit?"":"clear"}"><b>${hit?"Exposure to a listed wallet":"No listed wallets found"}</b>
+      <div>${hit?`Funds from this wallet reach a wallet labelled "${hit.label}" (${hit.source}) 2 hops away. Exposure score: 60 of 100.`:`None of the wallets within ${hops} hop${hops>1?"s":""} appear on OFAC or your blocklist.`}</div></div>
+    <div class="grid g2">
+      <section class="panel"><h2>Wallet summary</h2><div class="facts">
+        <div>Network<b>${t.network}</b></div><div>Received<b>${fmt(t.total)} USDT</b></div><div>Senders<b>${t.senders}</b></div><div>First seen<b>${t.firstSeen}</b></div></div>
+        ${t.addr===CASE_WALLET?`<p style="margin:14px 0 0;font-size:14px">This wallet received the 46,000 withdrawal from customer <span class="mono">C-2291</span>. It was first used 2 days before that withdrawal.</p>`:""}
+      </section>
+      <section class="panel"><h2>How to read the trail</h2><p style="margin:0;font-size:14px;color:var(--ink-2)">Each column is one step further from the traced wallet. Thicker lines carry more money. Only the largest outgoing transfers are followed, and every wallet is screened. A red dashed line means money reached a listed wallet.</p></section>
+    </div>
+    <section class="panel" style="margin-top:16px"><h2>Money trail</h2>${s}</section>`;
+}
+
+/* ---------- STR ---------- */
+function renderSTR(){
+  const a=state.alerts.find(x=>x.id===route.arg), c=caseOf(a), cs=a.cid==="C-2291";
+  const sec=state.decisions[a.id+"_str"]||{
+    who:cs?`${a.name} (customer ${a.cid}), student, Canadian resident, customer since March 2025. Declared income 4,000 a month.`:`${a.name} (customer ${a.cid}).`,
+    what:cs?"Received 48,200 by bank transfer from 12 accounts, then converted 46,000 to USDT and withdrew it to an external TRON wallet.":a.reason+".",
+    when:cs?"2 to 6 September 2026.":"September 2026.",
+    where:cs?"Domestic bank transfers into the customer's account; USDT withdrawal on the TRON network.":"Customer's accounts with the institution.",
+    why:cs?"Volume is 12 times the declared monthly income. Four deposits were just below the reporting threshold. Most senders are newly opened accounts. Funds left within 24 hours and reached a blocklisted wallet 2 hops later. This matches money mule indicators.":"See case findings.",
+    actions:"Account placed under enhanced monitoring. Customer not contacted, to avoid tipping off."};
+  const F=[["who","Who"],["what","What happened"],["when","When"],["where","Where"],["why","Why it's suspicious"],["actions","Actions taken"]];
+  $("#view").innerHTML=`
+    <button class="backlink" data-back>← Back to case ${a.id}</button>
+    <h1>STR draft for ${a.name}<span class="draftnote">${a.status==="Awaiting approval"?"Submitted by "+a.submittedBy+" · awaiting approval":"AI draft · you approve"}</span></h1>
+    <p class="sub">Edit anything. Run the figure check before approving: every amount and count must match the records.</p>
+    <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);align-items:start" id="strgrid">
+      <section class="panel">${F.map(([k,l])=>`<div class="str-sec"><label for="s_${k}">${l}</label><textarea id="s_${k}" data-k="${k}">${sec[k]}</textarea></div>`).join("")}
+        <div id="checkres"></div>
+        <div class="actions"><button class="btn" id="check">Check figures</button><button class="btn" data-perm-not="str.approve" id="submitapp">Submit for approval</button><button class="btn primary" data-perm="str.approve" id="approve">Approve and file</button></div></section>
+      <aside class="panel"><h2>Evidence used</h2><ul class="evidence" style="padding-left:18px;margin:0">
+        ${c.txns.map(t=>`<li>${t[0]}: ${t[1]==="in"?"received":"sent"} <b>${fmt(t[3])}</b> by ${t[2]}</li>`).join("")}</ul>
+        <h2 style="margin-top:18px">Guidance cited</h2><ol style="padding-left:18px;margin:0;font-size:14px"><li>FINTRAC guidance on suspicious transaction reporting, ML indicators</li><li>FATF red flag indicators for virtual assets</li></ol>
+        <p class="muted" style="font-size:12.5px;margin-top:12px">In the full system each citation opens the exact passage the assistant used.</p></aside>
+    </div>`;
+  if(innerWidth<860) $("#strgrid").style.gridTemplateColumns="1fr";
+  $("[data-back]").onclick=()=>go("case",a.id);
+  const save=()=>{const o={};F.forEach(([k])=>o[k]=$("#s_"+k).value);state.decisions[a.id+"_str"]=o;return o};
+  document.querySelectorAll("textarea[data-k]").forEach(t=>t.addEventListener("input",()=>{save();t.classList.remove("flag")}));
+  $("#check").onclick=()=>{
+    const known=new Set(c.txns.map(t=>t[3]).concat(cs?[48200,46000,12,4,9500,9900,4000,24,2,6,2025,2026,1,10000]:[2025,2026]));
+    const bad=[];F.forEach(([k])=>{const ta=$("#s_"+k);const nums=(ta.value.match(/\d[\d,]*/g)||[]).map(x=>+x.replace(/,/g,""));const miss=nums.filter(n=>!known.has(n)&&n>31);if(miss.length){ta.classList.add("flag");bad.push(...miss)}});
+    $("#checkres").innerHTML=bad.length?`<div class="err">These figures don't match the records: ${bad.map(fmt).join(", ")}. Correct them or add the supporting transaction.</div>`:`<div class="verified">✓ Every figure matches the transaction records</div>`;
+    log("Checked STR figures",a.id,bad.length?bad.length+" mismatches":"all matched");
+  };
+  $("#approve").onclick=()=>{ if(a.submittedBy&&a.submittedBy===PERSONA().name){toast("You drafted this STR. Another officer must approve it.");return} openDecision(a,"file_str")};
+  $("#submitapp").onclick=()=>{save();a.status="Awaiting approval";a.submittedBy=PERSONA().name;log("Submitted STR for approval",a.id,"four-eyes review");toast("Sent to a compliance officer for approval");go("today")};
+}
+
+/* ---------- Decisions ---------- */
+let pending=null;
+function openDecision(a,d){pending=a;$("#mdecision").value=d;$("#mreason").value="";$("#merr").hidden=true;$("#modal").classList.add("open");$("#mreason").focus()}
+$("#mcancel").onclick=()=>$("#modal").classList.remove("open");
+$("#mreason").addEventListener("input",()=>$("#merr").hidden=true);
+$("#msave").onclick=()=>{
+  const r=$("#mreason").value.trim(); if(!r){$("#merr").hidden=false;return}
+  const d=$("#mdecision").value, labels={file_str:"STR filed",false_positive:"Closed as false positive",request_info:"Information requested",escalate:"Escalated"};
+  pending.status=labels[d]; log(labels[d],pending.id,r); $("#modal").classList.remove("open"); toast(labels[d]+" for "+pending.id);
+  go(d==="file_str"?"reports":"queue");
+};
+
+/* ---------- Reports, upload, audit ---------- */
+function renderReports(){
+  const done=state.alerts.filter(a=>a.status!=="open");
+  $("#view").innerHTML=`<h1>Reports</h1><p class="sub">Every decision, with the analyst and reason on record.</p>
+    <div class="tablewrap"><table><thead><tr><th>Alert</th><th>Customer</th><th>Outcome</th><th>Score</th></tr></thead><tbody>
+    ${done.map(a=>`<tr><td class="mono">${a.id}</td><td>${a.name}</td><td>${a.status}</td><td>${scoreCell(a.score,a.band)}</td></tr>`).join("")||`<tr><td colspan="4" class="muted">No decisions yet. Open an alert from the queue to start.</td></tr>`}</tbody></table></div>`;
+}
+function renderUpload(){
+  $("#view").innerHTML=`<h1>Statements</h1><p class="sub">For customers without a live data connection. Upload a CSV export and the rules run on it straight away.</p>
+    <div class="panel"><div class="drop"><p style="margin:0 0 10px">CSV columns: <span class="mono">timestamp, direction, amount, counterparty_id</span> (optional: channel, country, merchant_category)</p>
+      <input type="file" id="csv" accept=".csv" aria-label="Statement CSV"> <button class="btn" id="sample">Use a sample statement</button></div>
+      <div class="form-row" style="margin-top:14px"><label for="exp" style="font-size:14px">Declared monthly income</label><input type="text" id="exp" value="4000" style="flex:0 1 140px"></div>
+      <div id="upout"></div></div>`;
+  $("#csv").onchange=e=>{const f=e.target.files[0];if(f)f.text().then(analyzeCSV)};
+  $("#sample").onclick=()=>{const rows=["timestamp,direction,amount,counterparty_id,channel"];const d=new Date("2026-09-01");
+    for(let i=0;i<11;i++){d.setHours(d.getHours()+9);rows.push(`${d.toISOString()},in,${i<4?9600+i*90:2800+i*100},SENDER${i},bank`)}
+    d.setHours(d.getHours()+10);rows.push(`${d.toISOString()},out,44000,EXCH1,crypto`);analyzeCSV(rows.join("\n"))};
+}
+function analyzeCSV(text){
+  const [head,...lines]=text.trim().split(/\r?\n/); const cols=head.split(",").map(s=>s.trim());
+  const need=["timestamp","direction","amount","counterparty_id"].filter(c=>!cols.includes(c));
+  if(need.length){$("#upout").innerHTML=`<div class="err">Missing columns: ${need.join(", ")}. Add them and upload again.</div>`;return}
+  const rows=lines.map(l=>{const v=l.split(",");const o={};cols.forEach((c,i)=>o[c]=v[i]);o.amount=+o.amount;o.t=new Date(o.timestamp);return o}).filter(r=>!isNaN(r.amount));
+  const exp=+$("#exp").value.replace(/,/g,"")||0, hits=[];
+  const near=rows.filter(r=>r.amount>=9000&&r.amount<10000); if(near.length>=3) hits.push(`Structuring: ${near.length} transactions just below 10,000`);
+  const ins=rows.filter(r=>r.direction==="in"); const snd=new Set(ins.map(r=>r.counterparty_id)).size; if(snd>=8) hits.push(`Fan-in: ${snd} different senders`);
+  const vol=ins.reduce((s,r)=>s+r.amount,0); if(exp&&vol>3*exp) hits.push(`Velocity: received ${fmt(vol)}, ${(vol/exp).toFixed(1)}x declared income`);
+  const big=rows.filter(r=>r.direction==="out"&&r.amount>0.8*vol&&vol>0); if(big.length) hits.push(`Rapid movement: ${fmt(big[0].amount)} sent out after the deposits`);
+  const score=Math.min(100,hits.length*24);
+  $("#upout").innerHTML=`<div style="margin-top:16px" class="alertbox ${hits.length?"":"clear"}"><b>${rows.length} transactions checked · score ${score}</b>
+    <div>${hits.length?hits.map(h=>`<div>• ${h}</div>`).join(""):"No rule hits in this statement."}</div></div>
+    <p class="muted" style="font-size:13px;margin:0">Uploaded statements are scored with rules only. The behaviour model and money network need the customer's full history.</p>`;
+  log("Analyzed statement","upload",rows.length+" rows, "+hits.length+" hits");
+}
+function renderAudit(){
+  $("#view").innerHTML=`<h1>Audit log</h1><p class="sub">Every view, search, AI run and decision is recorded with who did it and why.</p>
+    <div class="tablewrap"><table><thead><tr><th>Time</th><th>Analyst</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>
+    ${state.audit.map(e=>`<tr><td class="muted">${e.at}</td><td>${e.user}</td><td>${e.action}</td><td class="mono">${e.target}</td><td>${e.detail}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">Nothing recorded yet.</td></tr>`}</tbody></table></div>`;
+}
+
+
+/* ---------- Screening: data ---------- */
+const POLICY={holdAt:40,blockAt:75,blockSanctions:true,travelRule:true,travelMin:1000,ownProof:true};
+const EXPO_CATS=[["exchange","Regulated exchanges","var(--low)"],["unknown","Unlabelled wallets","var(--line-2)"],["gambling","Gambling services","var(--med)"],["scam","Reported scams","var(--high)"],["sanctioned","Sanctioned","#7A0E09"]];
+let SCR=[
+ {id:"S-7F21",t:"10:42:08",dir:"out",cid:"C-2048",name:"Meera K.",amt:12500,asset:"USDT",net:"TRON",wallet:"TKp4Ruh8mWv2c9QxN3bLs7YfDe1GjZa6Ht",host:"Self-hosted",own:false,travel:"Not required (self-hosted)",score:62,sanction:false,
+  expo:{exchange:18,unknown:47,gambling:0,scam:35,sanctioned:0},signals:["Wallet first used 2 days ago","Received from 31 different wallets this week","Passes almost everything it receives straight on"],ms:1840},
+ {id:"S-7F20",t:"10:41:51",dir:"in",cid:"C-0612",name:"Aarav N.",amt:2400,asset:"USDT",net:"Ethereum",wallet:"0x8b1F3e7aA2c94D5e60fB1a3C27d9E4b5F0c61D2a",host:"VASP: Kraken",own:true,travel:"Received from sending exchange",score:6,sanction:false,
+  expo:{exchange:92,unknown:8,gambling:0,scam:0,sanctioned:0},signals:[],ms:910},
+ {id:"S-7F1F",t:"10:40:33",dir:"out",cid:"C-1190",name:"Sana R.",amt:640,asset:"USDT",net:"TRON",wallet:"TJw8KxS2pLm5Nq7Rb3VhYc9Ud4Fe6Ga1Hz",host:"Self-hosted",own:true,travel:"Below 1,000 threshold",score:12,sanction:false,
+  expo:{exchange:70,unknown:30,gambling:0,scam:0,sanctioned:0},signals:[],ms:1210},
+ {id:"S-7F1E",t:"10:39:02",dir:"in",cid:"C-3377",name:"Victor L.",amt:8900,asset:"USDT",net:"TRON",wallet:"TXq2Vb7NmK4cR9sLh3Wp8Yd5Fg6Jt1Ze7a",host:"Self-hosted",own:false,travel:"Not required (self-hosted)",score:91,sanction:true,
+  expo:{exchange:0,unknown:22,gambling:0,scam:10,sanctioned:68},signals:["Address appears on the OFAC list","Funds arrived through 2 intermediary wallets"],ms:1460},
+ {id:"S-7F1D",t:"10:37:45",dir:"out",cid:"C-0954",name:"Daniel O.",amt:3100,asset:"USDT",net:"TRON",wallet:"TGb5Nk8Lq2Wm7Rc3Xv9Yh4Ds6Fp1Je3Ta",host:"VASP: unknown",own:false,travel:"Missing: receiving exchange didn't respond",score:34,sanction:false,
+  expo:{exchange:40,unknown:28,gambling:32,scam:0,sanctioned:0},signals:["32% of this wallet's funds came from gambling services"],ms:2950},
+ {id:"S-7F1C",t:"10:35:10",dir:"in",cid:"C-2291",name:"Rohan M.",amt:1500,asset:"USDT",net:"TRON",wallet:"TQ7mWx3ZkP9vRb2LnH8sYcD4fGu6JtA1Ke",host:"Self-hosted",own:false,travel:"Not required (self-hosted)",score:78,sanction:false,
+  expo:{exchange:5,unknown:41,gambling:0,scam:54,sanctioned:0},signals:["Wallet linked to a reported investment scam 1 hop away","Same wallet received this customer's 46,000 withdrawal on 6 Sep"],ms:1620},
+ {id:"S-7F1B",t:"10:33:27",dir:"out",cid:"C-0771",name:"Anika T.",amt:900,asset:"USDT",net:"Ethereum",wallet:"0x2C4a9e1B7d3F6058aE2b9C1d7F4e3A6b8D0c5E91",host:"VASP: Coinbase",own:true,travel:"Below 1,000 threshold",score:4,sanction:false,
+  expo:{exchange:97,unknown:3,gambling:0,scam:0,sanctioned:0},signals:[],ms:880}
+];
+function decisionOf(x){
+  if(x.override) return x.override;
+  if(x.sanction&&POLICY.blockSanctions) return "block";
+  if(x.score>=POLICY.blockAt) return "block";
+  if(x.score>=POLICY.holdAt) return "hold";
+  if(POLICY.travelRule&&x.amt>=POLICY.travelMin&&/^Missing/.test(x.travel)) return "hold";
+  if(POLICY.ownProof&&x.host==="Self-hosted"&&x.amt>=POLICY.travelMin&&!x.own) return "hold";
+  return "release";
+}
+function whyOf(x){
+  const w=[];
+  if(x.sanction&&POLICY.blockSanctions) w.push("Wallet is on a sanctions list, which always blocks");
+  if(x.score>=POLICY.blockAt) w.push(`Risk score ${x.score} is at or above the block level (${POLICY.blockAt})`);
+  else if(x.score>=POLICY.holdAt) w.push(`Risk score ${x.score} is at or above the review level (${POLICY.holdAt})`);
+  if(POLICY.travelRule&&x.amt>=POLICY.travelMin&&/^Missing/.test(x.travel)) w.push("Travel rule information is missing for this amount");
+  if(POLICY.ownProof&&x.host==="Self-hosted"&&x.amt>=POLICY.travelMin&&!x.own) w.push("Customer hasn't proven they own this self-hosted wallet");
+  return w.length?w:["Score below the review level and all checks passed"];
+}
+const DEC_LABEL={release:"Released",hold:"On hold",block:"Blocked"};
+const decPill=x=>`<span class="dec ${decisionOf(x)} ${x.override?"override":""}">${DEC_LABEL[decisionOf(x)]}</span>`;
+const dirPill=x=>`<span class="dir ${x.dir}">${x.dir==="in"?"↓ Deposit":"↑ Withdrawal"}</span>`;
+const bandOf=s=>s>=POLICY.blockAt?"high":s>=POLICY.holdAt?"medium":"low";
+
+/* ---------- Screening: live screening ---------- */
+let liveFilter="all";
+function renderLive(){
+  const c=k=>SCR.filter(x=>decisionOf(x)===k).length;
+  const list=SCR.filter(x=>liveFilter==="all"||decisionOf(x)===liveFilter);
+  const avg=(SCR.reduce((a,x)=>a+x.ms,0)/SCR.length/1000).toFixed(1);
+  $("#view").innerHTML=`
+    <h1>Live screening</h1>
+    <p class="sub">Every crypto deposit and withdrawal is screened before money moves. Held and blocked transfers wait for you here.</p>
+    <div class="livebar">
+      <div class="chips" role="group" aria-label="Filter by decision" style="margin:0">
+        ${[["all","All",SCR.length],["hold","On hold",c("hold")],["block","Blocked",c("block")],["release","Released",c("release")]].map(([k,l,n])=>`<button class="chip" aria-pressed="${liveFilter===k}" data-lf="${k}">${l} · ${n}</button>`).join("")}
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span class="pulse"><i></i>Screening on · average ${avg}s per transfer</span><button class="btn" id="sim">Simulate a transfer</button></div>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Time</th><th>Type</th><th>Customer</th><th style="text-align:right">Amount</th><th>Counterparty wallet</th><th>Score</th><th>Decision</th></tr></thead>
+      <tbody>${list.map(x=>`<tr class="click ${x.fresh?"fresh":""}" tabindex="0" data-sid="${x.id}">
+        <td class="muted">${x.t}</td><td>${dirPill(x)}</td><td><b>${x.name}</b><div class="muted mono">${x.cid}</div></td>
+        <td style="text-align:right;font-weight:600">${fmt(x.amt)} <span class="muted" style="font-weight:400">${x.asset}</span></td>
+        <td><span class="mono">${short(x.wallet)}</span><div class="muted" style="font-size:12.5px">${x.net} · ${x.host}</div></td>
+        <td>${scoreCell(x.score,bandOf(x.score))}</td><td>${decPill(x)}</td></tr>`).join("")||`<tr><td colspan="7" class="muted">Nothing here right now.</td></tr>`}</tbody></table></div>`;
+  SCR.forEach(x=>x.fresh=false);
+  document.querySelectorAll("[data-lf]").forEach(b=>b.onclick=()=>{liveFilter=b.dataset.lf;renderLive()});
+  document.querySelectorAll("tr[data-sid]").forEach(r=>{const o=()=>go("shot",r.dataset.sid);r.onclick=o;r.onkeydown=e=>{if(e.key==="Enter")o()}});
+  $("#sim").onclick=simulate;
+}
+let simN=0;
+function simulate(){
+  const r=seeded("sim"+(++simN)+Date.now()), risky=r()<0.45, sanc=risky&&r()<0.25;
+  const names=[["C-4410","Neha V."],["C-1022","Omar S."],["C-3091","Grace P."],["C-0503","Kiran D."]], [cid,name]=names[Math.floor(r()*4)];
+  const scam=risky?Math.round(20+r()*50):0, sa=sanc?Math.round(40+r()*40):0, ex=Math.max(0,Math.round((100-scam-sa)*(risky?0.2:0.85))), un=100-scam-sa-ex;
+  const [hh,mm,ss]=SCR[0].t.split(":").map(Number), sec=hh*3600+mm*60+ss+20+Math.floor(r()*40), p2=n=>String(n).padStart(2,"0"), x={id:"S-"+(0x7F22+simN).toString(16).toUpperCase(),t:`${p2(Math.floor(sec/3600)%24)}:${p2(Math.floor(sec/60)%60)}:${p2(sec%60)}`,dir:r()<0.5?"in":"out",cid,name,
+    amt:Math.round(100+r()*(risky?20000:3000)),asset:"USDT",net:r()<0.7?"TRON":"Ethereum",wallet:fakeTron(r),host:r()<0.4?"VASP: Binance":"Self-hosted",own:r()<0.5,
+    travel:"Not required (self-hosted)",score:sanc?95:risky?Math.round(42+r()*45):Math.round(r()*30),sanction:sanc,
+    expo:{exchange:ex,unknown:un,gambling:0,scam,sanctioned:sa},signals:risky?["Wallet first used "+(1+Math.floor(r()*6))+" days ago","Linked to reported scam wallets"+(sanc?" and a sanctioned address":"")]:[],ms:Math.round(800+r()*1800),fresh:true};
+  if(x.host!=="Self-hosted") x.travel=r()<0.7?"Received from sending exchange":"Missing: counterparty exchange didn't respond";
+  SCR.unshift(x); log("Screened transfer",x.id,DEC_LABEL[decisionOf(x)]+", score "+x.score);
+  if(decisionOf(x)!=="release") raiseAlert(x);
+  toast(`${x.id} ${DEC_LABEL[decisionOf(x)].toLowerCase()} in ${(x.ms/1000).toFixed(1)}s`); render();
+}
+function raiseAlert(x){
+  if(state.alerts.some(a=>a.src===x.id)) return;
+  const d=decisionOf(x);
+  state.alerts.push({id:"A-"+x.id.slice(2),src:x.id,cid:x.cid,name:x.name,score:x.score,band:d==="block"?"high":"medium",channels:["crypto"],
+    reason:`Screening ${d==="block"?"blocked":"held"} a ${fmt(x.amt)} ${x.asset} ${x.dir==="in"?"deposit":"withdrawal"}: ${whyOf(x)[0].toLowerCase()}`,status:"open",age:"<1m"});
+}
+
+/* ---------- Screening: screening detail ---------- */
+function renderShot(){
+  const x=SCR.find(s=>s.id===route.arg), d=decisionOf(x);
+  const pol=(()=>{const o=x.override;x.override=null;const r=decisionOf(x);x.override=o;return r})();
+  const ex=EXPO_CATS.filter(([k])=>x.expo[k]>0);
+  const travelOk=!/^Missing/.test(x.travel), needsProof=x.host==="Self-hosted"&&x.amt>=POLICY.travelMin;
+  const ai = pol==="release" ? `Most of this wallet's funds come from ${x.expo.exchange>=50?"regulated exchanges":"unlabelled wallets with no risk indicators"}, and every required check passed. No action is needed.`
+    : `This ${x.dir==="in"?"deposit comes from":"withdrawal goes to"} a wallet where ${x.expo.sanctioned?x.expo.sanctioned+"% of funds trace to a sanctioned address":x.expo.scam?x.expo.scam+"% of funds trace to reported scam wallets":x.expo.gambling+"% of funds come from gambling services"}. ${x.signals[0]?x.signals[0]+". ":""}${pol==="block"?"Policy blocks this transfer. Consider whether an STR or a terrorist property report applies.":"Review the customer's explanation and the wallet trail before releasing."}`;
+  $("#view").innerHTML=`
+    <button class="backlink" data-back>← Live screening</button>
+    <div class="decisionbar ${d}">
+      <div class="big">${DEC_LABEL[d]}</div>
+      <div style="flex:1;min-width:240px">${x.override?`<div><b>Changed by ${PERSONA().name}:</b> ${x.ovReason}</div><div class="muted" style="font-size:13.5px">Policy decision was ${DEC_LABEL[pol].toLowerCase()}: ${whyOf(x).join("; ").toLowerCase()}</div>`:whyOf(x).map(w=>`<div>${w}</div>`).join("")}</div>
+      <div style="text-align:right"><div class="muted" style="font-size:12.5px">Screened in ${(x.ms/1000).toFixed(1)}s · ${x.id}</div></div>
+    </div>
+    <div class="casehead" style="margin-bottom:16px">
+      <div><h1>${dirPill(x)} ${fmt(x.amt)} ${x.asset} · ${x.name}</h1>
+        <div class="facts" style="margin-top:8px"><div>Customer<b class="mono">${x.cid}</b></div><div>Network<b>${x.net}</b></div><div>Wallet type<b>${x.host}</b></div><div>Time<b>${x.t}</b></div></div></div>
+      <div class="dial"><div class="num" style="color:var(--${bandOf(x.score)==="high"?"high":bandOf(x.score)==="medium"?"med":"low"})">${x.score}</div><div class="muted" style="font-size:13px">Wallet risk<br>score</div></div>
+    </div>
+    <div class="grid g2">
+      <section class="panel"><h2>Where this wallet's money comes from</h2>
+        <div class="mono" style="font-size:13px;word-break:break-all;white-space:normal">${x.wallet}</div>
+        <div class="expo" role="img" aria-label="${ex.map(([k,l])=>l+" "+x.expo[k]+"%").join(", ")}">${ex.map(([k,l,c])=>`<span style="width:${x.expo[k]}%;background:${c}" title="${l} ${x.expo[k]}%"></span>`).join("")}</div>
+        <div class="expokey">${ex.map(([k,l,c])=>`<div style="--c:${c}">${l} <b>${x.expo[k]}%</b></div>`).join("")}</div>
+        ${x.signals.length?`<h2 style="margin-top:18px">Warning signs</h2>${x.signals.map(sg=>`<div class="reason"><span>${sg}</span></div>`).join("")}`:`<p class="muted" style="margin:16px 0 0;font-size:14px">No warning signs in this wallet's behaviour.</p>`}
+        <div class="actions" style="justify-content:flex-start"><button class="btn" data-tr>Trace this wallet</button></div>
+      </section>
+      <section class="panel"><h2>Compliance checks</h2>
+        <div class="check"><span class="ic ${x.sanction?"no":"ok"}">${x.sanction?"✕":"✓"}</span><span>Sanctions screening</span><small>${x.sanction?"Match on OFAC list. Verify on the official OFAC search before filing.":"No match on OFAC or your blocklist"}</small></div>
+        <div class="check"><span class="ic ${x.expo.scam||x.expo.sanctioned?"warn":"ok"}">${x.expo.scam||x.expo.sanctioned?"!":"✓"}</span><span>Exposure to risky wallets</span><small>${x.expo.scam+x.expo.sanctioned}% of funds trace to listed wallets</small></div>
+        <div class="check"><span class="ic ${travelOk?"ok":"no"}">${travelOk?"✓":"✕"}</span><span>Travel rule</span><small>${x.travel}</small></div>
+        <div class="check"><span class="ic ${!needsProof||x.own?"ok":"warn"}">${!needsProof||x.own?"✓":"!"}</span><span>Wallet ownership</span><small>${x.host!=="Self-hosted"?"Hosted by an exchange":x.own?"Customer proved ownership with a signed message":needsProof?"Not proven yet. Ask the customer to sign a message from this wallet.":"Not required below "+fmt(POLICY.travelMin)}</small></div>
+      </section>
+    </div>
+    <section class="panel" style="margin-top:16px"><h2>Assistant explanation <span class="draftnote">Draft · check before acting</span></h2>
+      <p style="margin:0;max-width:78ch">${ai}</p></section>
+    <div class="actions">
+      ${d!=="release"?`<button class="btn" data-perm="screening.override" data-ov="release">Release transfer</button>`:""}
+      ${x.host==="Self-hosted"&&!x.own?`<button class="btn" data-perm="screening.override" data-proof>Request ownership proof</button>`:""}
+      ${d!=="block"?`<button class="btn danger" data-perm="screening.override" data-ov="block">Block transfer</button>`:""}
+      <button class="btn primary" data-case>Open case</button>
+    </div>
+    <section class="panel" id="ovbox" hidden style="margin-top:12px"></section>`;
+  $("[data-back]").onclick=()=>go("live");
+  $("[data-tr]").onclick=()=>go("wallet",x.wallet);
+  document.querySelectorAll("[data-ov]").forEach(b=>b.onclick=()=>{
+    const act=b.dataset.ov, box=$("#ovbox");
+    box.innerHTML=`<label for="ovr" style="font-weight:600;font-size:14px">Reason for ${act==="release"?"releasing":"blocking"} this transfer</label>
+      <textarea id="ovr" rows="3" style="width:100%;margin:6px 0;border:1px solid var(--line-2);border-radius:8px;padding:9px;background:var(--panel)" placeholder="Customer provided invoice for the purchase and the wallet belongs to their own exchange account."></textarea>
+      <div class="err" id="overr" hidden>Add a reason first. It's saved to the audit log.</div>
+      <div class="actions" style="margin-top:6px"><button class="btn" id="ovc">Cancel</button><button class="btn ${act==="block"?"danger":"primary"}" id="ovs">${act==="release"?"Release transfer":"Block transfer"}</button></div>`;
+    box.hidden=false; $("#ovr").focus();
+    $("#ovr").oninput=()=>$("#overr").hidden=true;
+    $("#ovc").onclick=()=>{box.hidden=true};
+    $("#ovs").onclick=()=>{const reason=$("#ovr").value.trim(); if(!reason){$("#overr").hidden=false;return}
+      x.override=act; x.ovReason=reason; log(act==="release"?"Released transfer":"Blocked transfer",x.id,reason);
+      if(act==="block") raiseAlert(x); toast(DEC_LABEL[act]+": "+x.id); render();};
+  });
+  const pr=$("[data-proof]"); if(pr) pr.onclick=()=>{log("Requested wallet ownership proof",x.id,x.cid);toast("Signing request sent to "+x.name)};
+  $("[data-case]").onclick=()=>{raiseAlert(x);const a=state.alerts.find(a=>a.src===x.id)||state.alerts.find(a=>a.cid===x.cid);go("case",a.id)};
+}
+
+/* ---------- Screening: customer wallets ---------- */
+function renderWallets(){
+  const book=[
+    ["C-2291","Rohan M.","TQ7mWx3ZkP9vRb2LnH8sYcD4fGu6JtA1Ke","TRON","Self-hosted","Not verified",78,"Today"],
+    ["C-2048","Meera K.","TKp4Ruh8mWv2c9QxN3bLs7YfDe1GjZa6Ht","TRON","Self-hosted","Not verified",62,"Today"],
+    ["C-1190","Sana R.","TJw8KxS2pLm5Nq7Rb3VhYc9Ud4Fe6Ga1Hz","TRON","Self-hosted","Signed message",12,"Today"],
+    ["C-0771","Anika T.","0x2C4a9e1B7d3F6058aE2b9C1d7F4e3A6b8D0c5E91","Ethereum","VASP: Coinbase","Exchange confirmed",4,"Today"],
+    ["C-0612","Aarav N.","0x8b1F3e7aA2c94D5e60fB1a3C27d9E4b5F0c61D2a","Ethereum","VASP: Kraken","Exchange confirmed",6,"Yesterday"],
+    ["C-0954","Daniel O.","TGb5Nk8Lq2Wm7Rc3Xv9Yh4Ds6Fp1Je3Ta","TRON","VASP: unknown","Pending",34,"Today"]];
+  $("#view").innerHTML=`<h1>Customer wallets</h1><p class="sub">External wallets your customers send to or receive from. Verified wallets move faster; unverified self-hosted wallets are held above ${fmt(POLICY.travelMin)}.</p>
+    <div class="tablewrap"><table><thead><tr><th>Customer</th><th>Wallet</th><th>Type</th><th>Ownership</th><th>Risk</th><th>Last screened</th></tr></thead><tbody>
+    ${book.map(b=>`<tr class="click" tabindex="0" data-w="${b[2]}"><td><b>${b[1]}</b><div class="muted mono">${b[0]}</div></td><td class="mono">${short(b[2])}<div class="muted" style="font-family:var(--sans);font-size:12.5px">${b[3]}</div></td><td>${b[4]}</td>
+      <td><span class="dec ${b[5]==="Not verified"?"hold":b[5]==="Pending"?"hold":"release"}">${b[5]}</span></td><td>${scoreCell(b[6],bandOf(b[6]))}</td><td class="muted">${b[7]}</td></tr>`).join("")}</tbody></table></div>
+    <p class="muted" style="font-size:13px">Ownership is proven by signing a message from the wallet, by a small test transfer, or by confirmation from the customer's exchange. Click a wallet to trace it.</p>`;
+  document.querySelectorAll("tr[data-w]").forEach(r=>{const o=()=>go("wallet",r.dataset.w);r.onclick=o;r.onkeydown=e=>{if(e.key==="Enter")o()}});
+}
+
+/* ---------- Screening: policy ---------- */
+function renderPolicy(){
+  $("#view").innerHTML=`<h1>Screening policy</h1><p class="sub">Set when transfers are released, held or blocked. The preview shows what today's transfers would look like under these settings.</p>
+    <div class="grid g2">
+      <section class="panel"><h2>Risk score levels</h2>
+        <label for="ph" style="font-size:14px">Hold for review at or above</label>
+        <div class="slider"><input type="range" id="ph" min="10" max="90" step="1" value="${POLICY.holdAt}"><output id="pho">${POLICY.holdAt}</output></div>
+        <label for="pb" style="font-size:14px">Block at or above</label>
+        <div class="slider"><input type="range" id="pb" min="20" max="100" step="1" value="${POLICY.blockAt}"><output id="pbo">${POLICY.blockAt}</output></div>
+        <div class="err" id="perr" hidden>The block level must be higher than the hold level.</div>
+        <h2 style="margin-top:8px">Always-on checks</h2>
+        <label class="toggle"><input type="checkbox" id="t1" ${POLICY.blockSanctions?"checked":""}><span><b>Block sanctioned wallets</b><br><span class="muted">Whatever the score. Recommended.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="t2" ${POLICY.travelRule?"checked":""}><span><b>Hold transfers missing travel rule data</b><br><span class="muted">For transfers of ${fmt(POLICY.travelMin)} or more to or from another exchange.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="t3" ${POLICY.ownProof?"checked":""}><span><b>Require ownership proof for self-hosted wallets</b><br><span class="muted">For transfers of ${fmt(POLICY.travelMin)} or more.</span></span></label>
+      </section>
+      <section class="panel"><h2>Preview on today's transfers</h2><div class="preview" id="pv"></div>
+        <p class="muted" style="font-size:13px;margin:14px 0 0">Lower levels catch more risk but put more work in the queue. Every change is saved to the audit log with your name.</p>
+        <div class="actions"><span class="muted" data-perm-not="policy.edit" style="font-size:13px">Only a compliance officer or admin can change the policy.</span><button class="btn primary" data-perm="policy.edit" id="psave">Save policy</button></div></section>
+    </div>`;
+  const draft={...POLICY};
+  const pv=()=>{const save={...POLICY};Object.assign(POLICY,draft);const n=k=>SCR.filter(x=>!x.override&&decisionOf(x)===k).length;
+    $("#pv").innerHTML=`<div style="background:var(--low-soft);color:var(--low)"><b>${n("release")}</b>Released</div><div style="background:var(--med-soft);color:var(--med)"><b>${n("hold")}</b>On hold</div><div style="background:var(--high-soft);color:var(--high)"><b>${n("block")}</b>Blocked</div>`;Object.assign(POLICY,save)};
+  const upd=()=>{draft.holdAt=+$("#ph").value;draft.blockAt=+$("#pb").value;$("#pho").textContent=draft.holdAt;$("#pbo").textContent=draft.blockAt;
+    draft.blockSanctions=$("#t1").checked;draft.travelRule=$("#t2").checked;draft.ownProof=$("#t3").checked;$("#perr").hidden=draft.blockAt>draft.holdAt;pv()};
+  ["#ph","#pb","#t1","#t2","#t3"].forEach(id=>$(id).addEventListener("input",upd)); pv();
+  $("#psave").onclick=()=>{if(draft.blockAt<=draft.holdAt){$("#perr").hidden=false;return}
+    Object.assign(POLICY,draft);log("Changed screening policy","policy",`hold ${draft.holdAt}, block ${draft.blockAt}`);
+    SCR.filter(x=>decisionOf(x)!=="release").forEach(raiseAlert);toast("Policy saved");render()};
+}
+
+
+/* ---------- Today: one inbox for held transfers and alerts ---------- */
+const secOf=t=>{const [h,m,x]=t.split(":").map(Number);return h*3600+m*60+x};
+function todoItems(){
+  const latest=Math.max(...SCR.map(x=>secOf(x.t)))+120;
+  const held=SCR.filter(x=>!x.override&&decisionOf(x)==="hold").map(x=>({kind:"transfer",id:x.id,score:x.score,urgent:1,
+    title:`${x.name}: ${fmt(x.amt)} ${x.asset} ${x.dir==="in"?"deposit":"withdrawal"} on hold`,detail:whyOf(x)[0],
+    wait:Math.max(1,Math.round((latest-secOf(x.t))/60))}));
+  const al=state.alerts.filter(a=>a.status==="open"&&a.band==="high"&&!a.src).map(a=>({kind:"alert",id:a.id,score:a.score,urgent:0,
+    title:`${a.name}: alert ${a.id}`,detail:a.reason,age:a.age}));
+  const blocked=state.alerts.filter(a=>a.status==="open"&&a.src&&decisionOf(SCR.find(x=>x.id===a.src))==="block").map(a=>({kind:"alert",id:a.id,score:a.score,urgent:0,
+    title:`${a.name}: blocked transfer needs review`,detail:a.reason.replace(/^Screening blocked /,"Blocked "),age:a.age}));
+  const appr=can("str.approve")?state.alerts.filter(a=>a.status==="Awaiting approval").map(a=>({kind:"approval",id:a.id,score:200,urgent:2,
+    title:`${a.name}: STR awaiting your approval`,detail:"Submitted by "+a.submittedBy+". Four-eyes review: someone other than the drafter must approve.",age:"<1m"})):[];
+  return [...appr,...held,...blocked,...al].sort((p,q)=>q.urgent-p.urgent||q.score-p.score);
+}
+function renderToday(){
+  const items=todoItems(), n=k=>SCR.filter(x=>decisionOf(x)===k).length;
+  const vol=SCR.reduce((s,x)=>s+x.amt,0), exp={}; EXPO_CATS.forEach(([k])=>exp[k]=0);
+  SCR.forEach(x=>EXPO_CATS.forEach(([k])=>exp[k]+=x.amt*x.expo[k]/100));
+  const open=state.alerts.filter(a=>a.status==="open").length, filed=state.alerts.filter(a=>a.status==="STR filed").length;
+  $("#view").innerHTML=`
+    <h1>Today</h1>
+    <p class="sub">Transfers waiting on you come first, because a customer is waiting too. Then blocked transfers and high-risk alerts.</p>
+    <div class="stats">
+      <div class="stat">Transfers screened<b>${SCR.length}</b></div>
+      <div class="stat warn">On hold<b>${n("hold")}</b></div>
+      <div class="stat bad">Blocked<b>${n("block")}</b></div>
+      <div class="stat">Open alerts<b>${open}</b></div>
+      <div class="stat">STRs filed<b>${filed}</b></div>
+    </div>
+    <div class="grid" style="grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);align-items:start" id="tgrid">
+      <section class="panel"><h2>Needs your decision</h2>
+        ${items.map(i=>`<div class="todo" tabindex="0" data-k="${i.kind}" data-id="${i.id}">
+          <span class="kindtag ${i.kind!=="transfer"?"al":""}">${i.kind==="alert"?"Alert":i.kind==="approval"?"Approval":"Transfer"}</span>
+          <span class="t1">${i.title}</span>
+          <span class="wait" ${i.wait?"":`style="color:var(--ink-3);font-weight:500"`}>${i.wait?"Waiting "+i.wait+" min":i.age+" ago"}</span>
+          <span class="t2">${i.detail}</span></div>`).join("")||`<p class="muted">You're all caught up. New items appear here as they're screened.</p>`}
+      </section>
+      <div class="grid">
+        <section class="panel"><h2>Screening right now</h2><div class="feed">
+          ${SCR.slice(0,5).map(x=>`<div><span>${x.dir==="in"?"↓":"↑"} ${x.name} · ${fmt(x.amt)} ${x.asset}</span>${decPill(x)}</div>`).join("")}</div>
+          <div class="actions" style="margin-top:10px"><button class="btn" id="tsim">Simulate a transfer</button></div></section>
+        <section class="panel"><h2>Where today's crypto came from</h2>
+          <div class="expo">${EXPO_CATS.filter(([k])=>exp[k]>0).map(([k,l,c])=>`<span style="width:${exp[k]/vol*100}%;background:${c}"></span>`).join("")}</div>
+          <div class="expokey">${EXPO_CATS.filter(([k])=>exp[k]>0).map(([k,l,c])=>`<div style="--c:${c}">${l} <b>${Math.round(exp[k]/vol*100)}%</b></div>`).join("")}</div>
+          <p class="muted" style="font-size:12.5px;margin:10px 0 0">Share of ${fmt(vol)} screened today, weighted by amount.</p></section>
+      </div>
+    </div>`;
+  if(innerWidth<860) $("#tgrid").style.gridTemplateColumns="1fr";
+  document.querySelectorAll(".todo").forEach(t=>{const o=()=>go(t.dataset.k==="alert"?"case":t.dataset.k==="approval"?"str":"shot",t.dataset.id);t.onclick=o;t.onkeydown=e=>{if(e.key==="Enter")o()}});
+  $("#tsim").onclick=simulate;
+}
+
+
+/* ---------- Identity, roles and permissions ---------- */
+const PERMS=[
+ ["Customer data",[["cases.view","View alerts, cases and transfers"],["cases.decide","Close alerts, request info"],["wallet.trace","Trace wallets"],["screening.override","Release or block held transfers"]]],
+ ["Reporting",[["str.draft","Run AI investigation and draft STRs"],["str.approve","Approve and file STRs"],["data.export","Export case data"]]],
+ ["Governance",[["policy.edit","Change screening policy"],["audit.view","View audit log"]]],
+ ["Administration",[["users.manage","Invite and manage users"],["roles.manage","Edit roles and permissions"],["features.manage","Turn features on or off"]]]];
+const PLATFORM_PERMS=[
+ ["Tenants",[["orgs.manage","Create organizations and change their plan"],["platform.support","Support tenants: see user list, resend invitations"]]],
+ ["Platform team",[["platform.users.manage","Invite and manage platform staff"],["platform.roles.manage","Edit platform roles"]]],
+ ["Plans and policy",[["platform.plans.manage","Manage plans and their features"],["platform.security.manage","Set the security baseline for every tenant"]]],
+ ["Oversight",[["platform.audit.view","View the platform audit log"]]]];
+const ROLES={
+ "Platform owner":{system:true,scope:"platform",desc:"Full control. Holds the break-glass login",perms:["orgs.manage","platform.support","platform.users.manage","platform.roles.manage","platform.plans.manage","platform.security.manage","platform.audit.view"]},
+ "Platform admin":{system:true,scope:"platform",desc:"Runs tenants, plans and the platform team",perms:["orgs.manage","platform.support","platform.users.manage","platform.plans.manage","platform.audit.view"]},
+ "Platform support":{system:true,scope:"platform",desc:"Helps tenants with sign-in. Never sees customer data",perms:["platform.support"]},
+ "Platform auditor":{system:true,scope:"platform",desc:"Reads the platform audit log",perms:["platform.audit.view"]},
+ "Organization admin":{system:true,perms:["users.manage","roles.manage","features.manage","audit.view"]},
+ "Compliance officer":{system:true,perms:["cases.view","cases.decide","wallet.trace","screening.override","str.draft","str.approve","data.export","policy.edit","audit.view"]},
+ "Compliance analyst":{system:true,perms:["cases.view","cases.decide","wallet.trace","screening.override","str.draft"]},
+ "Auditor (read-only)":{system:true,perms:["cases.view","audit.view"]}};
+const PERSONAS=[
+ {name:"Sentrail Ops",role:"Platform owner",org:"Sentrail platform",email:"ops@sentrail.io",method:"password"},
+ {name:"Priya N.",role:"Platform support",org:"Sentrail platform",email:"priya.n@sentrail.io",method:"password"},
+ {name:"Leah Chen",role:"Organization admin",org:"Northwind Remit Inc.",email:"leah.chen@northwindremit.ca",method:"sso"},
+ {name:"Ansuman P.",role:"Compliance officer",org:"Northwind Remit Inc.",email:"ansuman.p@northwindremit.ca",method:"sso"},
+ {name:"Ravi K.",role:"Compliance analyst",org:"Northwind Remit Inc.",email:"ravi.k@northwindremit.ca",method:"sso"},
+ {name:"Marta G.",role:"Auditor (read-only)",org:"Northwind Remit Inc.",email:"marta.g@external-audit.ca",method:"password"},
+ {name:"Amir H.",role:"Organization admin",org:"Maple Ridge Digital Assets",email:"amir.h@mapleridge.ca",method:"password"}];
+let personaIx=3;
+const PERSONA=()=>PERSONAS[personaIx];
+const can=p=>(ROLES[PERSONA().role]?.perms||[]).includes(p);
+const canAny=(...ps)=>ps.some(can);
+const isPlatform=()=>PERSONA().org==="Sentrail platform";
+const ROUTE_PERM={today:"cases.view",live:"cases.view",shot:"cases.view",queue:"cases.view",case:"cases.view",str:"str.draft",wallet:"wallet.trace",wallets:"wallet.trace",
+ account:null,upload:"cases.decide",reports:"cases.view",policy:"cases.view",audit:"audit.view",orgs:["orgs.manage","platform.support"],users:["users.manage","platform.users.manage","platform.support"],roles:["roles.manage","platform.roles.manage"],
+ features:["features.manage","platform.plans.manage"],security:["users.manage","platform.security.manage"],adminaudit:"platform.audit.view",enroll:null,denied:null};
+const routeAllowed=r=>{const q=ROUTE_PERM[r];return !q||(Array.isArray(q)?canAny(...q):can(q))};
+const firstAllowed=()=>["today","orgs","users","adminaudit","audit"].find(routeAllowed)||"denied";
+function gate(){
+  document.querySelectorAll("[data-perm]").forEach(e=>e.hidden=!can(e.dataset.perm));
+  document.querySelectorAll("[data-perm-not]").forEach(e=>e.hidden=can(e.dataset.permNot));
+  document.querySelectorAll("[data-perm-any]").forEach(e=>e.hidden=!e.dataset.permAny.split(",").some(can));
+  if(route.name==="policy"&&!can("policy.edit")) document.querySelectorAll("#view input").forEach(i=>i.disabled=true);
+}
+new MutationObserver(gate).observe(document.body,{childList:true,subtree:true});
+function renderDenied(){$("#view").innerHTML=`<h1>No access</h1><p class="sub">Your role doesn't include any screens yet. Ask your organization admin to assign permissions.</p>`}
+
+/* ---------- Admin data ---------- */
+const FEATURES=[["screening","Live screening","Screen crypto deposits and withdrawals before money moves"],["alerts","Alerts and cases","Rules, behaviour model and network scoring"],["ai","AI investigation","Local open-source model drafts summaries and STRs"],["trace","Wallet trace","Follow funds across TRON, Ethereum and Bitcoin"],["statements","Statement upload","Score CSV statements from unconnected customers"],["export","Data export","Download case files and audit logs"]];
+const ORGS=[
+ {id:"org_7h2k",env:"prod",color:"#0F6E56",sso:{type:"Microsoft Entra ID",domain:"northwindremit.ca",enforced:true},name:"Northwind Remit Inc.",type:"MSB: remittance, FX",reg:"M23456789",country:"Canada",region:"Canada (Montréal)",plan:"Enterprise",users:6,status:"Active",features:["screening","alerts","ai","trace","statements","export"]},
+ {id:"org_3m9q",env:"sandbox",color:"#993C1D",sso:null,name:"Maple Ridge Digital Assets",type:"MSB: virtual currency dealer",reg:"M24567810",country:"Canada",region:"Canada (Montréal)",plan:"Professional",users:14,status:"Active",features:["screening","alerts","ai","trace","statements"]},
+ {id:"org_8p4w",env:"sandbox",color:"#534AB7",sso:null,name:"Harbourline Payments",type:"PSP",reg:"RPAA-PSP-0412",country:"Canada",region:"Canada (Toronto)",plan:"Starter",users:3,status:"Trial",features:["alerts","trace"]}];
+const USERS=[
+ {id:"m1",org:"Maple Ridge Digital Assets",name:"Amir H.",email:"amir.h@mapleridge.ca",role:"Organization admin",mfa:"Passkey",status:"Active",last:"Today 08:55"},
+ {id:"m2",org:"Maple Ridge Digital Assets",name:"Chloé B.",email:"chloe.b@mapleridge.ca",role:"Compliance officer",mfa:"Authenticator app",status:"Active",last:"Yesterday"},
+ {id:"m3",org:"Maple Ridge Digital Assets",name:"",email:"jun.l@mapleridge.ca",role:"Compliance analyst",mfa:"Not set up",status:"Invited",last:"Expires in 70h"},
+ {id:"u1",name:"Leah Chen",email:"leah.chen@northwindremit.ca",role:"Organization admin",mfa:"Security key",status:"Active",last:"Today 09:12"},
+ {id:"u2",name:"Ansuman P.",email:"ansuman.p@northwindremit.ca",role:"Compliance officer",mfa:"Authenticator app",status:"Active",last:"Today 10:40"},
+ {id:"u3",name:"Ravi K.",email:"ravi.k@northwindremit.ca",role:"Compliance analyst",mfa:"Authenticator app",status:"Active",last:"Today 10:44"},
+ {id:"u4",name:"Marta G.",email:"marta.g@external-audit.ca",role:"Auditor (read-only)",mfa:"Authenticator app",status:"Active",last:"Yesterday"},
+ {id:"u5",name:"Daniel W.",email:"daniel.w@northwindremit.ca",role:"Compliance analyst",mfa:"Not set up",status:"Suspended",last:"12 days ago"},
+ {id:"u6",name:"",email:"sofia.r@northwindremit.ca",role:"Compliance analyst",mfa:"Not set up",status:"Invited",last:"Expires in 61h"}];
+const SEC={mfa:true,sso:false,issuer:"https://auth.northwindremit.ca/realms/sentrail",timeout:15,ips:"203.0.113.0/24",minLen:14,retention:5,keyVer:"v7",rotated:"12 Sep 2026"};
+const maskEmail=e=>e.replace(/^(.)[^@]*(@.*)$/,"$1•••$2");
+
+/* ---------- Organizations (platform admin) ---------- */
+function renderOrgs(){
+  $("#view").innerHTML=`<h1>Organizations</h1><p class="sub">Each organization's data is isolated at the database level. Platform admins manage organizations but can't see their customers or cases.</p>
+   <div class="actions" style="justify-content:flex-start;margin:0 0 14px"><button class="btn primary" id="neworg" data-perm="orgs.manage">Add organization</button></div>
+   <section class="panel" id="orgform" hidden></section>
+   <div class="tablewrap"><table><thead><tr><th>Organization</th><th>Registration</th><th>Plan</th><th>Data region</th><th>Users</th><th>Features</th><th>Status</th></tr></thead><tbody>
+   ${ORGS.map(o=>`<tr><td><b>${o.name}</b><div class="muted" style="font-size:12.5px">${o.type}</div></td><td class="mono">${o.reg}</td><td><span class="planchip">${o.plan}</span></td><td>${o.region}</td><td>${o.users}</td><td>${o.features.length} of ${FEATURES.length}</td><td><span class="status ${o.status}">${o.status}</span></td></tr>`).join("")}</tbody></table></div>`;
+  $("#neworg").onclick=()=>{const f=$("#orgform");f.hidden=false;f.style.marginBottom="16px";f.innerHTML=`<h2>New organization</h2>
+    <div class="fields2">
+     <div class="field"><label for="on">Legal name</label><input id="on" placeholder="Prairie Exchange Ltd."></div>
+     <div class="field"><label for="ot">Business type</label><select id="ot"><option>MSB: remittance, FX</option><option>MSB: virtual currency dealer</option><option>PSP</option><option>Bank or credit union</option></select></div>
+     <div class="field"><label for="or">Regulator registration number</label><input id="or" placeholder="M12345678"><small>FINTRAC MSB number or RPAA registration</small></div>
+     <div class="field"><label for="og">Data region</label><select id="og"><option>Canada (Montréal)</option><option>Canada (Toronto)</option></select><small>Data never leaves this region</small></div>
+     <div class="field"><label for="op">Plan</label><select id="op">${Object.keys(PLANS).map(k=>`<option ${k==="Professional"?"selected":""}>${k}</option>`).join("")}</select></div>
+     <div class="field"><label for="oa">First admin's work email</label><input id="oa" type="email" placeholder="admin@prairieexchange.ca"><small>They'll get an invitation to set up their account and MFA</small></div>
+    </div>
+    <p style="font-weight:600;font-size:13.5px;margin:4px 0 6px">Features included</p>
+    <p class="muted" style="font-size:13px;margin:0 0 6px">Features come from the plan. Change a plan's features under Features.</p>
+    <div class="err" id="oerr" hidden></div>
+    <div class="actions"><button class="btn" id="ocancel">Cancel</button><button class="btn primary" id="osave">Create and send invitation</button></div>`;
+    $("#ocancel").onclick=()=>f.hidden=true;
+    $("#osave").onclick=()=>{const n=$("#on").value.trim(),r=$("#or").value.trim(),a=$("#oa").value.trim(),e=$("#oerr");
+      if(!n||!r){e.textContent="Add the legal name and registration number.";e.hidden=false;return}
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)){e.textContent="Enter a valid work email for the first admin.";e.hidden=false;return}
+      ORGS.push({id:"org_"+Math.random().toString(36).slice(2,6),name:n,type:$("#ot").value,reg:r,country:"Canada",region:$("#og").value,plan:$("#op").value,users:1,status:"Pending",
+        features:[...PLANS[$("#op").value]],env:"prod",color:"#185FA5",sso:null});
+      log("Created organization",n,"admin invited: "+maskEmail(a));toast("Organization created. Invitation sent to "+maskEmail(a));renderOrgs()};
+  };
+}
+function renderAdminAudit(){
+  const ev=[["10:46","Sentrail Ops","Created organization","Harbourline Payments"],["10:31","system","Rotated data encryption key","v6 → v7"],["09:58","Sentrail Ops","Changed plan","Maple Ridge Digital Assets: Enterprise"],["09:02","system","Verified audit chain","3 organizations, 18,402 events"]];
+  $("#view").innerHTML=`<h1>Platform audit</h1><p class="sub">Platform-level events only. Each organization's own audit log stays private to that organization.</p>
+   <div class="alertbox clear"><b>Audit chain verified</b><div>Every event is linked to the one before it by a hash, so any change or deletion breaks the chain and is detected.</div></div>
+   <div class="tablewrap"><table><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Target</th></tr></thead><tbody>
+   ${state.audit.filter(e=>e.action==="Created organization").map(e=>`<tr><td class="muted">${e.at}</td><td>${e.user}</td><td>${e.action}</td><td>${e.target}</td></tr>`).join("")}
+   ${ev.map(e=>`<tr><td class="muted">${e[0]}</td><td>${e[1]}</td><td>${e[2]}</td><td>${e[3]}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+/* ---------- Users and invitations ---------- */
+function renderTenantUsers(){
+  const roleOpts=r=>Object.keys(ROLES).filter(k=>ROLES[k].scope!=="platform").map(k=>`<option ${k===r?"selected":""}>${k}</option>`).join("");
+  $("#view").innerHTML=`<h1>Users and invitations</h1><p class="sub">Names and emails are encrypted in the database. Revealing an email is recorded in the audit log.</p>
+   <section class="panel" style="margin-bottom:16px"><h2>Invite someone</h2>
+    <div class="form-row"><input type="text" id="iemail" placeholder="name@${PERSONA().email.split("@")[1]}" aria-label="Work email" style="flex:1 1 260px">
+     <select id="irole" class="reason" aria-label="Role">${roleOpts("Compliance analyst")}</select>
+     <button class="btn primary" id="isend">Send invitation</button></div>
+    <div class="err" id="ierr" hidden></div>
+    <p class="muted" style="font-size:13px;margin:8px 0 0">${myOrg().sso?`People at <b>${myOrg().sso.domain}</b> sign in with ${myOrg().sso.type}. Others get an email from Sentrail's identity service to set a password and two-factor. Links expire in 72 hours.`:"They'll get an email to set a password and two-factor sign-in. The link expires in 72 hours and works once."}</p></section>
+   <div class="tablewrap"><table><thead><tr><th>Person and sign-in</th><th>Email</th><th>Role</th><th>MFA</th><th>Status</th><th>Last active</th><th></th></tr></thead><tbody>
+   ${USERS.filter(u=>(u.org||"Northwind Remit Inc.")===PERSONA().org).map(u=>`<tr><td><b>${u.name||"Not set up yet"}</b><div class="muted" style="font-size:12.5px">${signin(u)}</div></td>
+     <td><span class="mono" id="em_${u.id}">${maskEmail(u.email)}</span> <button class="btn" style="padding:2px 8px;font-size:12px" data-reveal="${u.id}">Reveal</button></td>
+     <td><select class="reason" data-role="${u.id}" aria-label="Role for ${u.name||u.email}" ${u.name==="Leah Chen"?"disabled":""}>${roleOpts(u.role)}</select></td>
+     <td style="color:${u.mfa==="Not set up"?"var(--high)":"inherit"}">${u.mfa}</td><td><span class="status ${u.status}">${u.status}</span></td><td class="muted">${u.last}</td>
+     <td style="white-space:nowrap">${u.status==="Invited"?`<button class="btn" style="padding:4px 10px;font-size:13px" data-preview="${u.id}">Preview invitation</button>`:
+       u.name==="Leah Chen"?"":`<button class="btn ${u.status==="Active"?"danger":""}" style="padding:4px 10px;font-size:13px" data-susp="${u.id}">${u.status==="Active"?"Suspend":"Reactivate"}</button>`}</td></tr>`).join("")}</tbody></table></div>`;
+  $("#isend").onclick=()=>{const e=$("#iemail").value.trim(),er=$("#ierr");
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)){er.textContent="Enter a valid work email.";er.hidden=false;return}
+    if(USERS.some(u=>u.email.toLowerCase()===e.toLowerCase())){er.textContent="This person already has an account or invitation.";er.hidden=false;return}
+    USERS.push({id:"u"+(USERS.length+1),org:PERSONA().org,name:"",email:e,role:$("#irole").value,mfa:"Not set up",status:"Invited",last:"Expires in 72h"});
+    log("Invited user",maskEmail(e),$("#irole").value);toast("Invitation sent to "+maskEmail(e));renderUsers()};
+  $("#iemail").oninput=()=>$("#ierr").hidden=true;
+  document.querySelectorAll("[data-reveal]").forEach(b=>b.onclick=()=>{const u=USERS.find(x=>x.id===b.dataset.reveal);$("#em_"+u.id).textContent=u.email;b.remove();log("Revealed email",u.name||maskEmail(u.email),"decrypted for display")});
+  document.querySelectorAll("[data-role]").forEach(sel=>sel.onchange=()=>{const u=USERS.find(x=>x.id===sel.dataset.role);const old=u.role;u.role=sel.value;log("Changed role",u.name||maskEmail(u.email),old+" → "+u.role);toast("Role updated. It applies at their next request.")});
+  document.querySelectorAll("[data-susp]").forEach(b=>b.onclick=()=>{const u=USERS.find(x=>x.id===b.dataset.susp);u.status=u.status==="Active"?"Suspended":"Active";log(u.status==="Suspended"?"Suspended user":"Reactivated user",u.name,u.status==="Suspended"?"all sessions ended":"");toast(u.name+(u.status==="Suspended"?" suspended. Their sessions were ended.":" reactivated."));renderUsers()});
+  document.querySelectorAll("[data-preview]").forEach(b=>b.onclick=()=>go("enroll",b.dataset.preview));
+}
+
+/* ---------- Invitation acceptance and MFA enrollment ---------- */
+let enrollStep=0;
+function renderEnroll(){
+  const u=USERS.find(x=>x.id===route.arg)||USERS.find(x=>x.status==="Invited");
+  if(!u){$("#view").innerHTML=`<h1>No pending invitation</h1>`;return}
+  const steps=["Your details","Password","Two-factor","Done"];
+  const head=`<button class="backlink" data-back>← Users and invitations</button><div class="steps">${steps.map((t,i)=>`<span class="${i===enrollStep?"on":i<enrollStep?"done":""}">${i<enrollStep?"✓ ":""}${t}</span>`).join("")}</div>`;
+  let body="";
+  if(enrollStep===0) body=`<h1>Join Northwind Remit Inc.</h1><p class="sub">Leah Chen invited ${maskEmail(u.email)} as <b>${u.role}</b>.</p>
+     <div class="field"><label for="en">Full name</label><input id="en" autocomplete="name" placeholder="Sofia Ramirez"></div><div class="err" id="eerr" hidden>Enter your full name.</div>
+     <div class="actions"><button class="btn primary" id="enext">Continue</button></div>`;
+  if(enrollStep===1) body=`<h1>Create a password</h1><p class="sub">Use at least 14 characters. A passphrase of four or more words works well.</p>
+     <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="new-password"><div class="meter"><span id="pm" style="width:0"></span></div><small id="pmt">Too short</small></div>
+     <div class="err" id="eerr" hidden>Choose a stronger password.</div><div class="actions"><button class="btn primary" id="enext">Continue</button></div>`;
+  if(enrollStep===2) body=`<h1>Set up two-factor sign-in</h1><p class="sub">Scan this code with an authenticator app such as Aegis, 2FAS or Google Authenticator, then enter the 6-digit code.</p>
+     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">${qr(u.email)}<div><div class="muted" style="font-size:12.5px">Can't scan? Enter this key</div><div class="mono" style="font-size:14px;margin-top:4px">JBSW Y3DP EHPK 3PXP</div></div></div>
+     <div class="field" style="margin-top:16px"><label for="otp">6-digit code</label><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="max-width:160px;letter-spacing:.2em"></div>
+     <div class="err" id="eerr" hidden>Enter the 6 digits shown in your app.</div><div class="actions"><button class="btn primary" id="enext">Verify and finish</button></div>`;
+  if(enrollStep===3) body=`<h1>You're all set</h1><p class="sub">${u.name} can now sign in as ${u.role}. Save your recovery codes somewhere safe; each works once.</p>
+     <div class="panel mono" style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:14px">${["7KQ2-M8XD","P4ZT-91VF","R6WN-3HQA","D2LC-8YEU","H9BS-5JTK","X3FG-6NRP"].map(c=>`<span>${c}</span>`).join("")}</div>
+     <div class="actions"><button class="btn primary" data-back>Back to users</button></div>`;
+  $("#view").innerHTML=`<div class="enrollcard">${head}<section class="panel">${body}</section></div>`;
+  document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>{enrollStep=0;go("users")});
+  const pw=$("#pw"); if(pw) pw.oninput=()=>{const v=pw.value,sc=Math.min(4,(v.length>=14)+(v.length>=20)+(/[^a-zA-Z]/.test(v))+(/\s|-/.test(v)&&v.length>=14));
+    const c=["var(--high)","var(--high)","var(--med)","var(--low)","var(--low)"][sc];$("#pm").style.width=(sc*25||6)+"%";$("#pm").style.background=c;$("#pmt").textContent=v.length<14?"Too short":["Weak","Weak","Fair","Strong","Very strong"][sc];$("#eerr").hidden=true};
+  const en=$("#enext"); if(en) en.onclick=()=>{
+    if(enrollStep===0){const n=$("#en").value.trim();if(n.length<2){$("#eerr").hidden=false;return}u.pendingName=n}
+    if(enrollStep===1){if($("#pw").value.length<14){$("#eerr").hidden=false;return}}
+    if(enrollStep===2){if(!/^\d{6}$/.test($("#otp").value)){$("#eerr").hidden=false;return}u.name=u.pendingName;u.status="Active";u.mfa="Authenticator app";u.last="Just now";log("User enrolled",u.name,"password set, MFA verified")}
+    enrollStep++;renderEnroll()};
+}
+function qr(seed){const r=seeded(seed);let c="";for(let y=0;y<21;y++)for(let x=0;x<21;x++){const fin=(x<7&&y<7)||(x>13&&y<7)||(x<7&&y>13);
+  const on=fin?((x%14<7&&y%14<7)&&(Math.max(Math.abs((x%14)-3),Math.abs((y%14)-3))!==2)):r()<.5; if(on)c+=`<rect x="${x*6}" y="${y*6}" width="6" height="6"/>`}
+  return `<svg width="138" height="138" viewBox="-6 -6 138 138" role="img" aria-label="QR code for authenticator setup" style="background:#fff;border-radius:6px"><g fill="#111">${c}</g></svg>`}
+
+/* ---------- Roles and permissions ---------- */
+function renderTenantRoles(){
+  const names=Object.keys(ROLES).filter(k=>ROLES[k].scope!=="platform");
+  const sod=names.filter(n=>{const p=ROLES[n].perms;return p.includes("users.manage")&&(p.includes("cases.decide")||p.includes("str.approve"))});
+  $("#view").innerHTML=`<h1>Roles and permissions</h1><p class="sub">Permissions are checked by the server on every request. Hiding a button is only for clarity.</p>
+   <div class="tablewrap"><table class="matrix"><thead><tr><th>Permission</th>${names.map(n=>`<th>${n}</th>`).join("")}</tr></thead><tbody>
+   ${PERMS.filter(([g])=>g!=="Platform").map(([g,ps])=>`<tr><td class="grp" colspan="${names.length+1}">${g}</td></tr>`+ps.map(([k,l])=>`<tr><td>${l}<div class="muted mono" style="font-size:11.5px">${k}</div></td>${names.map(n=>`<td><input type="checkbox" aria-label="${n}: ${l}" data-r="${n}" data-p="${k}" ${ROLES[n].perms.includes(k)?"checked":""} ${n==="Organization admin"&&k==="users.manage"?"disabled":""}></td>`).join("")}</tr>`).join("")).join("")}
+   </tbody></table></div>
+   ${sod.length?`<div class="sod"><b>Separation of duties:</b> ${sod.join(", ")} can both manage users and decide cases. One person could then create an account and use it to approve their own work. Split these if you can.</div>`:""}
+   <section class="panel" style="margin-top:16px"><h2>Create a custom role</h2><div class="form-row"><input type="text" id="rname" placeholder="Senior analyst" aria-label="Role name"><select id="rbase" class="reason" aria-label="Start from">${names.map(n=>`<option>${n}</option>`).join("")}</select><button class="btn primary" id="radd">Create role</button></div><div class="err" id="rerr" hidden></div></section>`;
+  document.querySelectorAll("[data-r]").forEach(c=>c.onchange=()=>{const R=ROLES[c.dataset.r];
+    R.perms=c.checked?[...R.perms,c.dataset.p]:R.perms.filter(x=>x!==c.dataset.p);
+    log("Changed permission",c.dataset.r,(c.checked?"granted ":"removed ")+c.dataset.p);renderRoles();render()});
+  $("#radd").onclick=()=>{const n=$("#rname").value.trim();if(!n||ROLES[n]){$("#rerr").textContent=n?"A role with this name exists.":"Name the role first.";$("#rerr").hidden=false;return}
+    ROLES[n]={system:false,perms:[...ROLES[$("#rbase").value].perms]};log("Created role",n,"copied from "+$("#rbase").value);renderRoles()};
+}
+
+/* ---------- Features ---------- */
+function renderTenantFeatures(){
+  const platform=isPlatform();
+  const o=myOrg()||ORGS[0];
+  $("#view").innerHTML=`<h1>Features</h1><p class="sub">${platform?"Choose which features each organization's plan includes.":"Turn features on or off for your organization. Features outside your plan are set by Sentrail."}</p>
+   ${platform?`<div class="field" style="max-width:360px"><label for="forg">Organization</label><select id="forg">${ORGS.map((x,i)=>`<option value="${i}">${x.name}</option>`).join("")}</select></div>`:""}
+   <section class="panel" id="flist"></section>`;
+  const draw=org=>{$("#flist").innerHTML=FEATURES.map(([k,l,d])=>{const on=org.features.includes(k);return `<div class="featrow"><div><b>${l}</b><br><small>${(PLANS[org.plan]||[]).includes(k)?d:"Not in your "+org.plan+" plan. Contact Sentrail to upgrade."}</small></div>
+    <label class="switch"><input type="checkbox" data-f="${k}" aria-label="${l}" ${on?"checked":""} ${(PLANS[org.plan]||[]).includes(k)?"":"disabled"}><span></span></label></div>`}).join("");
+    document.querySelectorAll("[data-f]").forEach(c=>c.onchange=()=>{org.features=c.checked?[...org.features,c.dataset.f]:org.features.filter(x=>x!==c.dataset.f);log(c.checked?"Turned on feature":"Turned off feature",org.name,c.dataset.f);toast("Saved")})};
+  draw(o); const fo=$("#forg"); if(fo) fo.onchange=()=>draw(ORGS[+fo.value]);
+}
+
+/* ---------- Security ---------- */
+function renderTenantSecurity(){
+  $("#view").innerHTML=`<h1>Security</h1><p class="sub">Settings for ${PERSONA().org}. Changes are audited.</p>
+   <section class="panel" style="margin-bottom:16px"><h2>Identity provider</h2>
+     <div class="keycard"><div>Sign-in service<b>Keycloak (open source)</b></div><div>Realm<b>sentrail</b></div><div>Protocol<b>OpenID Connect + PKCE</b></div><div>Brute-force protection<b>On, 5 attempts</b></div></div>
+     <div class="featrow" style="margin-top:8px"><div><b>Company single sign-on</b><br><small>${myOrg().sso?`People at ${myOrg().sso.domain} sign in through ${myOrg().sso.type}. Keycloak brokers the sign-in, so Sentrail never sees their password.`:"Connect Microsoft Entra ID, Google Workspace, Okta or any OIDC or SAML provider. Keycloak brokers the sign-in."}</small></div><label class="switch"><input type="checkbox" id="sbroker" ${myOrg().sso?"checked":""} aria-label="Company single sign-on"><span></span></label></div>
+     ${myOrg().sso?`<div class="fields2" style="margin-top:6px"><div class="field"><label>Provider</label><input value="${myOrg().sso.type}" readonly></div><div class="field"><label>Verified email domain</label><input value="${myOrg().sso.domain}" readonly><small>Verified by DNS TXT record</small></div></div>
+     <div class="featrow"><div><b>Require single sign-on for this domain</b><br><small>Blocks password sign-in for ${myOrg().sso.domain} addresses. Outside auditors still use a password and two-factor.</small></div><label class="switch"><input type="checkbox" ${myOrg().sso.enforced?"checked":""} aria-label="Require SSO"><span></span></label></div>`:""}
+     <div class="featrow"><div><b>Allow passkeys</b><br><small>Phishing-resistant sign-in with a fingerprint, face or security key (WebAuthn).</small></div><label class="switch"><input type="checkbox" checked aria-label="Allow passkeys"><span></span></label></div>
+   </section>
+   <div class="grid g2">
+    <section class="panel"><h2>Sign-in</h2>
+     <div class="featrow"><div><b>Two-step verification for everyone</b><br><small>Always on. The platform requires it for every account.</small></div><label class="switch"><input type="checkbox" id="smfa" checked disabled aria-label="Two-factor is always required"><span></span></label></div>
+     <input type="checkbox" id="ssso" hidden><input id="siss" hidden value="https://x">
+     <div class="fields2"><div class="field"><label for="sto">Sign out after inactivity (minutes)</label><input id="sto" type="number" min="5" max="${PSEC.maxIdle}" value="${SEC.timeout}"><small>Platform maximum: ${PSEC.maxIdle}</small></div>
+     <div class="field"><label for="spl">Minimum password length</label><input id="spl" type="number" min="${PSEC.minPw}" max="64" value="${Math.max(SEC.minLen,PSEC.minPw)}"><small>Platform minimum: ${PSEC.minPw}</small></div></div>
+     <div class="field"><label for="sip">Allowed IP ranges</label><input id="sip" value="${SEC.ips}"><small>Comma-separated. Leave empty to allow any network.</small></div>
+     <div class="err" id="serr" hidden></div>
+     <div class="actions"><button class="btn primary" id="ssave">Save sign-in settings</button></div></section>
+    <div class="grid">
+     <section class="panel"><h2>Encryption</h2>
+      <div class="keycard"><div>Personal data<b>AES-256-GCM</b></div><div>Isolation<b>Row-level security</b></div><div>Key management<b>OpenBao transit</b></div><div>Current key<b>${SEC.keyVer}</b></div><div>Last rotated<b>${SEC.rotated}</b></div></div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:12px 0 0">Names, emails and phone numbers are encrypted before they reach the database. Emails are found by a keyed hash, so they can be looked up without being stored in readable form.</p>
+      <div class="actions"><button class="btn" id="srot">Rotate key now</button></div></section>
+     <section class="panel"><h2>Data retention</h2>
+      <div class="field"><label for="sret">Keep records for (years)</label><input id="sret" type="number" min="5" max="10" value="${SEC.retention}"><small>At least 5 years for FINTRAC record keeping. Check your own obligations.</small></div></section>
+    </div></div>`;
+  $("#ssave").onclick=()=>{const t=+$("#sto").value,l=+$("#spl").value,e=$("#serr");
+    if(t<5||t>PSEC.maxIdle){e.textContent=`Inactivity timeout must be between 5 and ${PSEC.maxIdle} minutes (platform maximum).`;e.hidden=false;return}
+    if(l<PSEC.minPw){e.textContent=`Minimum password length can't be below the platform minimum of ${PSEC.minPw}.`;e.hidden=false;return}
+    if($("#ssso").checked&&!/^https:\/\//.test($("#siss").value)){e.textContent="The issuer URL must start with https://";e.hidden=false;return}
+    Object.assign(SEC,{mfa:$("#smfa").checked,sso:$("#ssso").checked,issuer:$("#siss").value,timeout:t,minLen:l,ips:$("#sip").value});e.hidden=true;
+    log("Changed security settings","sign-in",`MFA ${SEC.mfa?"required":"optional"}, timeout ${t}m`);toast("Sign-in settings saved")};
+  $("#srot").onclick=()=>{SEC.keyVer="v"+(+SEC.keyVer.slice(1)+1);SEC.rotated="Today";log("Rotated encryption key","personal data",SEC.keyVer);toast("New key "+SEC.keyVer+" in use. Old records re-encrypt in the background.");renderSecurity()};
+  $("#sret").onchange=()=>{if(+$("#sret").value<5){$("#sret").value=5;toast("Minimum is 5 years")}SEC.retention=+$("#sret").value;log("Changed retention","records",SEC.retention+" years")};
+}
+
+/* ---------- Persona switcher ---------- */
+$("#persona").innerHTML=PERSONAS.map((p,i)=>`<option value="${i}">${p.name}, ${p.role}</option>`).join("");
+$("#persona").value=personaIx;
+const setOrgLine=()=>$("#orgline").innerHTML=`<span class="rolechip">${PERSONA().role}</span><div class="mono" style="font-size:11.5px;margin-top:4px">${maskEmail(PERSONA().email)}</div>`;
+setOrgLine();
+$("#signout").onclick=()=>{log("Signed out",PERSONA().name);signedIn=false;MYSESS.splice(0,MYSESS.length,...MYSESS.filter(x=>!x.current));render();toast("Signed out")};
+$("#persona").onchange=e=>{personaIx=+e.target.value;setOrgLine();renderTenant();log("Signed in",PERSONA().name,PERSONA().role);route={name:firstAllowed()};render();toast("Now viewing as "+PERSONA().role)};
+
+
+/* ---------- Tenant display ---------- */
+const myOrg=()=>ORGS.find(o=>o.name===PERSONA().org);
+const signin=u=>{const o=ORGS.find(x=>x.name===(u.org||"Northwind Remit Inc."));
+  if(u.status==="Invited") return "Invitation sent";
+  if(o&&o.sso&&u.email.endsWith("@"+o.sso.domain)) return "Single sign-on, "+o.sso.type;
+  return "Password + "+(u.mfa==="Not set up"?"no second factor":u.mfa.toLowerCase())};
+function renderTenant(){
+  const p=PERSONA(), o=myOrg(), plat=isPlatform();
+  const name=plat?"Platform console":o.name, ini=name.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase();
+  $("#tenant").innerHTML=`<span class="av" style="background:${plat?"var(--chain)":o.color}">${ini}</span>
+    <span><span class="tn">${name}</span><span class="tm">${plat?`<span class="env platform">All tenants</span>`:`<span class="env ${o.env==="prod"?"prod":"sandbox"}">${o.env==="prod"?"Production":"Sandbox"}</span><span class="mono" style="font-size:11px">${o.id}</span>`}</span></span>`;
+  document.body.classList.toggle("sandbox",!plat&&o.env!=="prod");
+  document.title=(plat?"Platform":o.name)+" · Sentrail";
+}
+
+/* ---------- Sign-in (Keycloak via OpenID Connect) ---------- */
+let signedIn=false, login={step:"email",email:"",persona:null};
+function renderLogin(){
+  document.body.classList.add("signedout");
+  const P=login.persona, org=P?ORGS.find(o=>o.name===P.org):null;
+  const who=`<div class="lwho"><button class="lback" id="lchg" aria-label="Use a different email">←</button><span class="mono">${login.email}</span></div>`;
+  let body="";
+  if(login.step==="email") body=`<h1>Sign in to Sentrail</h1>
+    <p class="lsub">One sign-in for every organization and the platform team.</p>
+    <div class="field"><label for="lem">Work email</label><input id="lem" type="email" autocomplete="username" value="${login.email}" placeholder="name@company.ca"></div>
+    <div class="err" id="lerr" hidden>Enter a valid work email.</div>
+    <button class="btn primary full" id="lnext">Continue</button>
+    <details class="demo"><summary>Try a demo account</summary>
+      ${[["Platform team",p=>p.org==="Sentrail platform"],["Northwind Remit",p=>p.org==="Northwind Remit Inc."],["Maple Ridge (sandbox)",p=>p.org==="Maple Ridge Digital Assets"]].map(([g,f])=>`<div class="dg">${g}</div>`+PERSONAS.map((p,i)=>f(p)?`<button data-demo="${i}"><span>${p.email}</span><small>${p.role}${p.method==="sso"?" · SSO":""}</small></button>`:"").join("")).join("")}
+      <p>Any password of 14+ characters and any 6-digit code works in the demo.</p></details>`;
+  if(login.step==="sso") body=`${who}<h1>Continue with your company</h1>
+    <div class="ltenant"><span class="av" style="background:${org.color}">${org.name.split(/\s+/).map(w=>w[0]).join("").slice(0,2)}</span><span><b>${org.name}</b><small>${org.sso.domain} uses ${org.sso.type}</small></span></div>
+    <button class="btn primary full" id="lsso">Continue with ${org.sso.type}</button>
+    <p class="lsub" style="margin-top:12px">Your company checks your password and two-step verification. Sentrail never sees your password.</p>`;
+  if(login.step==="ssowait") body=`${who}<h1>Signing you in</h1><div class="idp"><span class="spin" aria-hidden="true"></span><span>Waiting for ${org.sso.type}…</span></div>`;
+  if(login.step==="password") body=`${who}<h1>Enter your password</h1>
+    <div class="field"><label for="lpw">Password</label><input id="lpw" type="password" autocomplete="current-password"></div>
+    <div class="err" id="lerr" hidden>Email or password is incorrect.</div>
+    <button class="btn primary full" id="lnext">Continue</button>
+    <button class="linkbtn lforgot" id="lforgot">Forgot password?</button>`;
+  if(login.step==="mfa") body=`${who}<h1>Two-step verification</h1>
+    <button class="btn primary full" id="lpasskey">Use your passkey</button>
+    <div class="lor"><span>or enter a code from your app</span></div>
+    <div class="field"><label for="lotp" class="sr-only">6-digit code</label><input id="lotp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="letter-spacing:.2em;text-align:center"></div>
+    <div class="err" id="lerr" hidden>That code didn't work. Check your app and try again.</div>
+    <button class="btn full" id="lnext">Verify code</button>`;
+  if(login.step==="forgot") body=`${who}<h1>Check your email</h1><p class="lsub">If this email has an account, we've sent a link to reset the password. It expires in 15 minutes.</p><button class="btn full" id="lchg2">Back to sign in</button>`;
+  $("#view").innerHTML=`<div class="login"><div class="card">
+    <div class="logo"><svg width="34" height="34" viewBox="0 0 28 28" aria-hidden="true"><path d="M14 2l10 4v7c0 6.5-4.3 11.2-10 13-5.7-1.8-10-6.5-10-13V6z" fill="var(--petrol)"/><path d="M9 17l4-5 3 3 4-5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    ${body}</div><p class="via">Secured by Keycloak · OpenID Connect</p></div>`;
+  const go2=st=>{login.step=st;renderLogin()};
+  const em=$("#lem"); if(em){em.focus();em.oninput=()=>$("#lerr").hidden=true;em.onkeydown=e=>{if(e.key==="Enter")$("#lnext").click()}}
+  document.querySelectorAll("[data-demo]").forEach(b=>b.onclick=()=>{$("#lem").value=PERSONAS[+b.dataset.demo].email;$("#lnext").click()});
+  [$("#lchg"),$("#lchg2")].forEach(x=>{if(x)x.onclick=()=>{login.persona=null;go2("email")}});
+  const fg=$("#lforgot"); if(fg) fg.onclick=()=>go2("forgot");
+  const pk=$("#lpasskey"); if(pk) pk.onclick=()=>finishLogin("passkey");
+  const ss=$("#lsso"); if(ss) ss.onclick=()=>{go2("ssowait");setTimeout(()=>finishLogin("sso"),matchMedia("(prefers-reduced-motion: reduce)").matches?300:1300)};
+  const pw=$("#lpw"); if(pw){pw.focus();pw.oninput=()=>$("#lerr").hidden=true;pw.onkeydown=e=>{if(e.key==="Enter")$("#lnext").click()}}
+  const otp=$("#lotp"); if(otp){otp.oninput=()=>$("#lerr").hidden=true;otp.onkeydown=e=>{if(e.key==="Enter")$("#lnext").click()}}
+  const nx=$("#lnext"); if(nx) nx.onclick=()=>{
+    if(login.step==="email"){const v=$("#lem").value.trim().toLowerCase();
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){$("#lerr").hidden=false;return}
+      login.email=v;login.persona=PERSONAS.find(p=>p.email===v)||null;
+      // company SSO is decided by email domain only, so this doesn't reveal whether an account exists
+      const o=ORGS.find(x=>x.sso&&v.endsWith("@"+x.sso.domain));
+      if(o){login.persona=login.persona||{org:o.name};go2("sso");return}
+      go2("password");return}
+    if(login.step==="password"){ if(!login.persona||$("#lpw").value.length<14){$("#lerr").hidden=false;$("#lpw").value="";return} go2("mfa");return}
+    if(login.step==="mfa"){ if(!/^\d{6}$/.test($("#lotp").value)){$("#lerr").hidden=false;return} finishLogin("totp")}
+  };
+}
+function finishLogin(method){
+  if(!PERSONAS.includes(login.persona)){login={step:"email",email:login.email,persona:null};renderLogin();
+    const e=$("#lerr");e.textContent="There's no Sentrail account for this email. Ask your organization admin to invite you.";e.hidden=false;return}
+  personaIx=PERSONAS.indexOf(login.persona); signedIn=true; document.body.classList.remove("signedout");
+  $("#persona").value=personaIx; setOrgLine(); renderTenant();
+  MYSESS.unshift({dev:"This browser",where:"Toronto, Canada",ip:"203.0.113.24",when:"Just now",method:{sso:"Single sign-on",passkey:"Passkey",totp:"Password + authenticator"}[method],current:true});
+  MYSESS.forEach((x,i)=>{if(i>0)x.current=false});
+  log("Signed in",PERSONA().name,{sso:"SSO via "+(myOrg()?.sso?.type||"IdP"),passkey:"passkey",totp:"password + TOTP"}[method]);
+  login={step:"email",email:"",persona:null}; route={name:firstAllowed()}; render(); toast("Signed in to "+(isPlatform()?"the platform console":PERSONA().org));
+}
+
+/* ---------- My account ---------- */
+const MYSESS=[{dev:"Firefox on Windows",where:"Toronto, Canada",ip:"203.0.113.24",when:"2 hours ago",method:"Single sign-on"},{dev:"Safari on iPhone",where:"Mississauga, Canada",ip:"198.51.100.7",when:"Yesterday",method:"Passkey"}];
+function renderAccount(){
+  const p=PERSONA(), o=myOrg(), sso=o&&o.sso&&p.email.endsWith("@"+o.sso.domain);
+  $("#view").innerHTML=`<h1>My account</h1><p class="sub">${p.role} at ${p.org}</p>
+   <div class="grid g2">
+    <section class="panel"><h2>Profile</h2><div class="facts"><div>Name<b>${p.name}</b></div><div>Email<b class="mono">${maskEmail(p.email)}</b></div><div>Role<b>${p.role}</b></div></div>
+     <p class="muted" style="font-size:13px;margin:12px 0 0">Your name and email are stored encrypted. Only your organization admin can change your role.</p></section>
+    <section class="panel"><h2>How you sign in</h2>
+     ${sso?`<div class="check"><span class="ic ok">✓</span><span>Single sign-on through ${o.sso.type}</span><small>Your company manages your password and two-factor</small></div>`:
+     `<div class="check"><span class="ic ok">✓</span><span>Password</span><small>Changed 41 days ago · <button class="linkbtn" data-acct="pw">Change password</button></small></div>
+      <div class="check"><span class="ic ok">✓</span><span>Authenticator app</span><small>Added 3 months ago</small></div>
+      <div class="check"><span class="ic ${p.role==="Organization admin"&&p.org!=="Northwind Remit Inc."?"ok":"warn"}">${p.role==="Organization admin"&&p.org!=="Northwind Remit Inc."?"✓":"+"}</span><span>Passkey</span><small>${p.role==="Organization admin"&&p.org!=="Northwind Remit Inc."?"YubiKey 5 · added last week":`Faster and phishing-resistant · <button class="linkbtn" data-acct="pk">Add a passkey</button>`}</small></div>
+      <div class="check"><span class="ic ok">✓</span><span>Recovery codes</span><small>6 of 8 left · <button class="linkbtn" data-acct="rc">Create new codes</button></small></div>`}
+    </section></div>
+   <section class="panel" style="margin-top:16px"><h2>Where you're signed in</h2>
+    ${MYSESS.map((x,i)=>`<div class="sess"><span><b>${x.dev}</b>${x.current?' <span class="status Active">This device</span>':""}<br><small>${x.where} · ${x.ip} · ${x.method} · ${x.when}</small></span>${x.current?"":`<button class="btn" style="padding:4px 10px;font-size:13px" data-rev="${i}">Sign out</button>`}</div>`).join("")}
+    <div class="actions"><button class="btn" id="revall">Sign out everywhere else</button></div></section>`;
+  document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>{const x=MYSESS.splice(+b.dataset.rev,1)[0];log("Ended session",x.dev,x.ip);toast("Signed out on "+x.dev);renderAccount()});
+  $("#revall").onclick=()=>{const n=MYSESS.filter(x=>!x.current).length;MYSESS.splice(0,MYSESS.length,...MYSESS.filter(x=>x.current));log("Ended other sessions",PERSONA().name,n+" sessions");toast(n?"Signed out of "+n+" other "+(n>1?"sessions":"session"):"No other sessions");renderAccount()};
+  document.querySelectorAll("[data-acct]").forEach(b=>b.onclick=()=>{const t={pw:"Keycloak will ask for your current password, then the new one",pk:"Your browser will ask you to confirm with your fingerprint, face or security key",rc:"Old codes stop working once new ones are created"}[b.dataset.acct];
+    log({pw:"Started password change",pk:"Started passkey setup",rc:"Regenerated recovery codes"}[b.dataset.acct],PERSONA().name);toast(t)});
+}
+
+
+/* ---------- Platform console (SaaS operator) ---------- */
+const PLANS={Starter:["alerts","trace"],Professional:["screening","alerts","ai","trace","statements"],Enterprise:["screening","alerts","ai","trace","statements","export"]};
+const PSEC={minPw:14,maxIdle:30,maxSession:12,retention:5,passkeys:true,staffPasskeyOnly:true,regions:["Canada (Montréal)","Canada (Toronto)"]};
+const PLATFORM_USERS=[
+ {id:"p1",name:"Sentrail Ops",email:"ops@sentrail.io",role:"Platform owner",signin:"Break-glass password + passkey",status:"Active",last:"Today 10:02"},
+ {id:"p2",name:"Dev K.",email:"dev.k@sentrail.io",role:"Platform admin",signin:"Keycloak + passkey",status:"Active",last:"Today 09:40"},
+ {id:"p3",name:"Priya N.",email:"priya.n@sentrail.io",role:"Platform support",signin:"Keycloak + passkey",status:"Active",last:"Today 08:15"},
+ {id:"p4",name:"Omar F.",email:"omar.f@sentrail.io",role:"Platform auditor",signin:"Keycloak + passkey",status:"Active",last:"Yesterday"},
+ {id:"p5",name:"",email:"lina.m@sentrail.io",role:"Platform support",signin:"Invitation sent",status:"Invited",last:"Expires in 52h"}];
+const platformRoleNames=()=>Object.keys(ROLES).filter(k=>ROLES[k].scope==="platform");
+const tenantRoleNames=()=>Object.keys(ROLES).filter(k=>ROLES[k].scope!=="platform");
+
+function renderUsers(){ isPlatform()?renderPlatformUsers():renderTenantUsers() }
+function renderRoles(){ isPlatform()?renderPlatformRoles():renderTenantRoles() }
+function renderFeatures(){ isPlatform()?renderPlatformFeatures():renderTenantFeatures() }
+function renderSecurity(){ isPlatform()?renderPlatformSecurity():renderTenantSecurity() }
+
+let userTab="team", supportView=null;
+function renderPlatformUsers(){
+  if(!can("platform.users.manage")) userTab="support";
+  const me=PERSONA(), owner=me.role==="Platform owner";
+  const tabs=`<div class="seg" role="group" aria-label="Whose users">
+    ${can("platform.users.manage")?`<button aria-pressed="${userTab==="team"}" data-tab="team">Platform team</button>`:""}
+    ${can("platform.support")?`<button aria-pressed="${userTab==="support"}" data-tab="support">Tenant support</button>`:""}</div>`;
+  let body="";
+  if(userTab==="team"){
+    const roleOpts=(r,dis)=>platformRoleNames().filter(k=>owner||k!=="Platform owner"||k===r).map(k=>`<option ${k===r?"selected":""}>${k}</option>`).join("");
+    body=`<section class="panel" style="margin-bottom:16px"><h2>Invite a team member</h2>
+      <div class="form-row"><input type="text" id="piemail" placeholder="name@sentrail.io" aria-label="Work email" style="flex:1 1 260px">
+       <select id="pirole" class="reason" aria-label="Platform role">${roleOpts("Platform support")}</select>
+       <button class="btn primary" id="pisend">Send invitation</button></div>
+      <div class="err" id="pierr" hidden></div>
+      <p class="muted" style="font-size:13px;margin:8px 0 0">Platform staff sign in through Keycloak with a passkey. Only a platform owner can add another owner.</p></section>
+     <div class="tablewrap"><table><thead><tr><th>Person and sign-in</th><th>Email</th><th>Role</th><th>Status</th><th>Last active</th><th></th></tr></thead><tbody>
+     ${PLATFORM_USERS.map(u=>{const self=u.name===me.name, lockOwner=u.role==="Platform owner"&&!owner;
+       return `<tr><td><b>${u.name||"Not set up yet"}</b><div class="muted" style="font-size:12.5px">${u.signin}</div></td>
+       <td><span class="mono" id="pem_${u.id}">${maskEmail(u.email)}</span></td>
+       <td><select class="reason" data-prole="${u.id}" aria-label="Role for ${u.name||u.email}" ${self||lockOwner?"disabled":""}>${roleOpts(u.role)}</select></td>
+       <td><span class="status ${u.status}">${u.status}</span></td><td class="muted">${u.last}</td>
+       <td>${self||lockOwner||u.status==="Invited"?(self?'<span class="muted" style="font-size:12.5px">You</span>':""):`<button class="btn ${u.status==="Active"?"danger":""}" style="padding:4px 10px;font-size:13px" data-psusp="${u.id}">${u.status==="Active"?"Suspend":"Reactivate"}</button>`}</td></tr>`}).join("")}
+     </tbody></table></div>`;
+  } else {
+    body=`<div class="note"><b>Support access.</b> You can see who has an account and help them sign in. You can't see names, customers, cases or reports. Every lookup is written to the organization's own audit log, so the customer can see it.</div>
+     <section class="panel" style="margin-bottom:16px"><div class="form-row">
+      <select id="sorg" class="reason" aria-label="Organization">${ORGS.map((o,i)=>`<option value="${i}">${o.name}</option>`).join("")}</select>
+      <input type="text" id="sreason" placeholder="Ticket 4821: admin can't sign in" aria-label="Reason" style="flex:1 1 240px">
+      <button class="btn primary" id="sview">View users</button></div><div class="err" id="serr2" hidden>Give a reason, such as a ticket number.</div></section>
+     <div id="sout"></div>`;
+  }
+  $("#view").innerHTML=`<h1>Users and invitations</h1><p class="sub">${userTab==="team"?"The people who run Sentrail. They manage the service, never customer data.":"Help a customer's users with invitations and sign-in."}</p>${tabs}${body}`;
+  document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{userTab=b.dataset.tab;renderPlatformUsers()});
+  if(userTab==="team"){
+    $("#pisend").onclick=()=>{const e=$("#piemail").value.trim(),er=$("#pierr");
+      if(!/^[^@\s]+@sentrail\.io$/i.test(e)){er.textContent="Platform staff need a @sentrail.io email.";er.hidden=false;return}
+      if(PLATFORM_USERS.some(u=>u.email===e.toLowerCase())){er.textContent="This person already has an account or invitation.";er.hidden=false;return}
+      PLATFORM_USERS.push({id:"p"+(PLATFORM_USERS.length+1),name:"",email:e.toLowerCase(),role:$("#pirole").value,signin:"Invitation sent",status:"Invited",last:"Expires in 72h"});
+      log("Invited platform staff",maskEmail(e),$("#pirole").value);toast("Invitation sent to "+maskEmail(e));renderPlatformUsers()};
+    $("#piemail").oninput=()=>$("#pierr").hidden=true;
+    document.querySelectorAll("[data-prole]").forEach(sel=>sel.onchange=()=>{const u=PLATFORM_USERS.find(x=>x.id===sel.dataset.prole),old=u.role;
+      if(old==="Platform owner"&&PLATFORM_USERS.filter(x=>x.role==="Platform owner"&&x.status==="Active").length<=1){toast("The platform needs at least one active owner");sel.value=old;return}
+      u.role=sel.value;log("Changed platform role",u.name||maskEmail(u.email),old+" → "+u.role);toast("Role updated. It applies at their next request.")});
+    document.querySelectorAll("[data-psusp]").forEach(b=>b.onclick=()=>{const u=PLATFORM_USERS.find(x=>x.id===b.dataset.psusp);
+      if(u.role==="Platform owner"&&u.status==="Active"&&PLATFORM_USERS.filter(x=>x.role==="Platform owner"&&x.status==="Active").length<=1){toast("The platform needs at least one active owner");return}
+      u.status=u.status==="Active"?"Suspended":"Active";log(u.status==="Suspended"?"Suspended platform staff":"Reactivated platform staff",u.name);toast(u.name+(u.status==="Suspended"?" suspended. Sessions ended in Sentrail and Keycloak.":" reactivated."));renderPlatformUsers()});
+  } else {
+    const show=()=>{const o=ORGS[+$("#sorg").value];const list=USERS.filter(u=>(u.org||"Northwind Remit Inc.")===o.name);
+      $("#sout").innerHTML=`<div class="tablewrap"><table><thead><tr><th>Email</th><th>Role</th><th>Sign-in set up</th><th>Status</th><th></th></tr></thead><tbody>
+       ${list.map(u=>`<tr><td class="mono">${maskEmail(u.email)}</td><td>${u.role}</td><td>${u.mfa==="Not set up"?'<span style="color:var(--high)">No</span>':"Yes"}</td><td><span class="status ${u.status}">${u.status}</span></td>
+       <td>${u.status==="Invited"?`<button class="btn" style="padding:4px 10px;font-size:13px" data-resend="${u.id}">Resend invitation</button>`:""}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No users yet.</td></tr>`}</tbody></table></div>`;
+      document.querySelectorAll("[data-resend]").forEach(b=>b.onclick=()=>{const u=USERS.find(x=>x.id===b.dataset.resend);log("Support resent invitation",o.name,maskEmail(u.email)+" · "+$("#sreason").value);toast("Invitation resent to "+maskEmail(u.email)+". Logged in "+o.name+"'s audit log.")});};
+    $("#sview").onclick=()=>{const r=$("#sreason").value.trim();if(r.length<5){$("#serr2").hidden=false;return}$("#serr2").hidden=true;
+      log("Support viewed users",ORGS[+$("#sorg").value].name,r);show()};
+    $("#sreason").oninput=()=>$("#serr2").hidden=true;
+  }
+}
+
+function renderPlatformRoles(){
+  const names=platformRoleNames();
+  $("#view").innerHTML=`<h1>Roles and permissions</h1><p class="sub">Platform roles for the Sentrail team. Organization roles are managed by each organization's admin.</p>
+   <div class="note"><b>Two login types, two sets of permissions.</b> Platform roles can only hold platform permissions, so platform staff can never be given access to customer data. The database rejects it even if the app had a bug.</div>
+   <div class="tablewrap"><table class="matrix"><thead><tr><th>Permission</th>${names.map(n=>`<th>${n}</th>`).join("")}</tr></thead><tbody>
+   ${PLATFORM_PERMS.map(([g,ps])=>`<tr><td class="grp" colspan="${names.length+1}">${g}</td></tr>`+ps.map(([k,l])=>`<tr><td>${l}<div class="muted mono" style="font-size:11.5px">${k}</div></td>${names.map(n=>`<td><input type="checkbox" aria-label="${n}: ${l}" data-pr="${n}" data-pp="${k}" ${ROLES[n].perms.includes(k)?"checked":""} ${n==="Platform owner"||n===PERSONA().role?"disabled":""}></td>`).join("")}</tr>`).join("")).join("")}
+   </tbody></table></div>
+   <p class="muted" style="font-size:13px">Platform owner always has every permission. You can't change your own role.</p>
+   <section class="panel" style="margin-top:16px"><h2>Create a platform role</h2><div class="form-row"><input type="text" id="prname" placeholder="Billing" aria-label="Role name"><select id="prbase" class="reason" aria-label="Start from">${names.map(n=>`<option>${n}</option>`).join("")}</select><button class="btn primary" id="pradd">Create role</button></div><div class="err" id="prerr" hidden></div></section>
+   <section class="panel" style="margin-top:16px"><h2>Default roles for new organizations</h2>
+    <p class="muted" style="font-size:13px;margin:0 0 12px">Every new organization starts with these four roles. They're seed data in the database (role templates), and each organization can add its own.</p>
+    <div class="tmpl">${tenantRoleNames().filter(n=>ROLES[n].system).map(n=>`<div><b>${n}</b>${ROLES[n].perms.length} permissions</div>`).join("")}</div></section>`;
+  document.querySelectorAll("[data-pr]").forEach(c=>c.onchange=()=>{const R=ROLES[c.dataset.pr];
+    R.perms=c.checked?[...R.perms,c.dataset.pp]:R.perms.filter(x=>x!==c.dataset.pp);
+    log("Changed platform permission",c.dataset.pr,(c.checked?"granted ":"removed ")+c.dataset.pp);render()});
+  $("#pradd").onclick=()=>{const n=$("#prname").value.trim();if(!n||ROLES[n]){$("#prerr").textContent=n?"A role with this name exists.":"Name the role first.";$("#prerr").hidden=false;return}
+    ROLES[n]={system:false,scope:"platform",perms:[...ROLES[$("#prbase").value].perms]};log("Created platform role",n);renderPlatformRoles()};
+}
+
+function renderPlatformFeatures(){
+  const plans=Object.keys(PLANS);
+  $("#view").innerHTML=`<h1>Features</h1><p class="sub">Plans decide which features organizations get. Changing a plan updates every organization on it.</p>
+   <div class="tablewrap" style="margin-bottom:16px"><table class="matrix"><thead><tr><th>Feature</th>${plans.map(pl=>`<th>${pl}<div class="muted" style="font-weight:500">${ORGS.filter(o=>o.plan===pl).length} orgs</div></th>`).join("")}</tr></thead><tbody>
+   ${FEATURES.map(([k,l,d])=>`<tr><td><b>${l}</b><div class="muted" style="font-size:12.5px">${d}</div></td>${plans.map(pl=>`<td><label class="switch" style="display:inline-block"><input type="checkbox" data-plan="${pl}" data-feat="${k}" ${PLANS[pl].includes(k)?"checked":""} aria-label="${l} in ${pl}"><span></span></label></td>`).join("")}</tr>`).join("")}
+   </tbody></table></div>
+   <section class="panel"><h2>Organizations</h2>
+    ${ORGS.map((o,i)=>`<div class="featrow"><div><b>${o.name}</b><br><small>${o.features.length} of ${FEATURES.length} features · ${o.env==="prod"?"Production":"Sandbox"}</small></div>
+      <select class="reason" data-oplan="${i}" aria-label="Plan for ${o.name}">${plans.map(pl=>`<option ${pl===o.plan?"selected":""}>${pl}</option>`).join("")}</select></div>`).join("")}</section>`;
+  document.querySelectorAll("[data-plan]").forEach(c=>c.onchange=()=>{const pl=c.dataset.plan,f=c.dataset.feat;
+    PLANS[pl]=c.checked?[...PLANS[pl],f]:PLANS[pl].filter(x=>x!==f);
+    const affected=ORGS.filter(o=>o.plan===pl);affected.forEach(o=>o.features=c.checked?[...new Set([...o.features,f])]:o.features.filter(x=>x!==f));
+    log((c.checked?"Added ":"Removed ")+"feature in plan",pl,f);toast(`${pl} updated. ${affected.length} organization${affected.length===1?"":"s"} ${c.checked?"get":"lose"} it now.`);renderPlatformFeatures()});
+  document.querySelectorAll("[data-oplan]").forEach(sel=>sel.onchange=()=>{const o=ORGS[+sel.dataset.oplan],old=o.plan;o.plan=sel.value;o.features=[...PLANS[o.plan]];
+    log("Changed plan",o.name,old+" → "+o.plan);toast(o.name+" is now on "+o.plan);renderPlatformFeatures()});
+}
+
+function renderPlatformSecurity(){
+  const tenants=[{n:"Northwind Remit Inc.",pw:14,idle:15,ret:5},{n:"Maple Ridge Digital Assets",pw:16,idle:20,ret:7},{n:"Harbourline Payments",pw:14,idle:30,ret:5}];
+  $("#view").innerHTML=`<h1>Security</h1><p class="sub">The baseline every organization must meet. Organizations can be stricter, never looser.</p>
+   <div class="grid g2">
+    <section class="panel"><h2>Baseline for all organizations</h2>
+     <div class="featrow"><div><b>Two-step verification</b><br><small>Always required for every account. This can't be turned off.</small></div><label class="switch"><input type="checkbox" checked disabled aria-label="Two-step verification always on"><span></span></label></div>
+     <div class="fields2" style="margin-top:12px">
+      <div class="field"><label for="bpw">Minimum password length</label><input id="bpw" type="number" min="12" max="64" value="${PSEC.minPw}"></div>
+      <div class="field"><label for="bidle">Longest inactivity before sign-out (minutes)</label><input id="bidle" type="number" min="5" max="60" value="${PSEC.maxIdle}"></div>
+      <div class="field"><label for="bsess">Longest session (hours)</label><input id="bsess" type="number" min="1" max="24" value="${PSEC.maxSession}"></div>
+      <div class="field"><label for="bret">Minimum record retention (years)</label><input id="bret" type="number" min="5" max="15" value="${PSEC.retention}"><small>FINTRAC requires at least 5</small></div></div>
+     <div class="featrow"><div><b>Allow passkeys</b><br><small>For everyone, through Keycloak.</small></div><label class="switch"><input type="checkbox" id="bpk" ${PSEC.passkeys?"checked":""} aria-label="Allow passkeys"><span></span></label></div>
+     <div class="featrow"><div><b>Platform staff must use passkeys</b><br><small>Phishing-resistant sign-in for anyone with platform access.</small></div><label class="switch"><input type="checkbox" id="bstaff" ${PSEC.staffPasskeyOnly?"checked":""} aria-label="Staff passkeys only"><span></span></label></div>
+     <p style="font-weight:600;font-size:13.5px;margin:12px 0 6px">Data regions offered</p>
+     ${["Canada (Montréal)","Canada (Toronto)"].map(r=>`<label style="display:inline-flex;gap:6px;margin:0 16px 8px 0;font-size:14px"><input type="checkbox" class="breg" value="${r}" ${PSEC.regions.includes(r)?"checked":""} style="accent-color:var(--petrol)">${r}</label>`).join("")}
+     <div id="bimpact" class="sod" style="margin-top:10px"></div>
+     <div class="err" id="berr" hidden></div>
+     <div class="actions"><button class="btn primary" id="bsave">Save baseline</button></div></section>
+    <div class="grid">
+     <section class="panel"><h2>Identity provider</h2><div class="keycard"><div>Service<b>Keycloak 26</b></div><div>Realm<b>sentrail</b></div><div>Brute-force lockout<b>5 attempts</b></div><div>Self-registration<b>Off</b></div></div>
+      <p class="muted" style="font-size:13px;margin:12px 0 0">Organizations connect their own Entra ID, Google Workspace or Okta through Keycloak after proving their domain by DNS.</p></section>
+     <section class="panel"><h2>Encryption</h2><div class="keycard"><div>Personal data<b>AES-256-GCM</b></div><div>Keys<b>OpenBao transit</b></div><div>Current key<b>${SEC.keyVer}</b></div><div>Isolation<b>Row-level security</b></div></div>
+      <div class="actions"><button class="btn" id="brot">Rotate key now</button></div></section>
+    </div></div>`;
+  const impact=()=>{const pw=+$("#bpw").value,idle=+$("#bidle").value,ret=+$("#bret").value;
+    const n=tenants.filter(t=>t.pw<pw||t.idle>idle||t.ret<ret);
+    $("#bimpact").hidden=!n.length;$("#bimpact").innerHTML=n.length?`<b>${n.length} organization${n.length>1?"s":""} will be raised to this baseline:</b> ${n.map(t=>t.n).join(", ")}.`:""};
+  ["#bpw","#bidle","#bret"].forEach(id=>$(id).addEventListener("input",impact)); impact();
+  $("#bsave").onclick=()=>{const pw=+$("#bpw").value,idle=+$("#bidle").value,ss=+$("#bsess").value,ret=+$("#bret").value,e=$("#berr");
+    if(pw<12){e.textContent="Minimum password length must be 12 or more.";e.hidden=false;return}
+    if(idle<5||idle>60){e.textContent="Inactivity must be between 5 and 60 minutes.";e.hidden=false;return}
+    if(ret<5){e.textContent="Retention can't be below 5 years.";e.hidden=false;return}
+    const regions=[...document.querySelectorAll(".breg:checked")].map(x=>x.value); if(!regions.length){e.textContent="Offer at least one data region.";e.hidden=false;return}
+    e.hidden=true;Object.assign(PSEC,{minPw:pw,maxIdle:idle,maxSession:ss,retention:ret,passkeys:$("#bpk").checked,staffPasskeyOnly:$("#bstaff").checked,regions});
+    SEC.minLen=Math.max(SEC.minLen,pw);SEC.timeout=Math.min(SEC.timeout,idle);SEC.retention=Math.max(SEC.retention,ret);
+    log("Changed platform security baseline","all organizations",`password ${pw}+, idle ≤${idle}m, retention ${ret}y`);toast("Baseline saved. Organizations below it were raised.")};
+  $("#brot").onclick=()=>{SEC.keyVer="v"+(+SEC.keyVer.slice(1)+1);log("Rotated encryption key","platform",SEC.keyVer);toast("New key "+SEC.keyVer+" in use.");renderPlatformSecurity()};
+}
+
+/* ---------- Universal search ---------- */
+function classify(q){
+  q=q.trim(); if(!q) return {kind:"empty",label:"Type to search"};
+  if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(q)) return {kind:"wallet",label:"TRON wallet"};
+  if(/^0x[a-fA-F0-9]{40}$/.test(q)) return {kind:"wallet",label:"Ethereum wallet"};
+  if(/^(bc1[a-z0-9]{25,62}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(q)) return {kind:"wallet",label:"Bitcoin wallet"};
+  if(/^(0x)?[a-fA-F0-9]{64}$/.test(q)) return {kind:"tx",label:"Transaction hash"};
+  if(/^\d{12,19}$/.test(q.replace(/[\s-]/g,""))&&q.replace(/[\s-]/g,"").length>=12) return {kind:"pan",label:"Full card number not allowed"};
+  if(/^\d{4}$/.test(q)) return {kind:"card",label:"Card, last 4 digits"};
+  if(/^C-\d+$/i.test(q)) return {kind:"customer",label:"Customer ID"};
+  if(/^[A-Z]{2,4}\d{6,14}$/i.test(q)) return {kind:"account",label:"Account number"};
+  return {kind:"name",label:"Name search"};
+}
+const qi=$("#q"), qk=$("#qkind");
+qi.addEventListener("input",()=>{const k=classify(qi.value);qk.textContent=k.label;qk.className="kind "+(k.kind==="wallet"?"wallet":k.kind==="pan"?"bad":k.kind==="empty"?"":"ok")});
+function doSearch(){
+  const v=qi.value.trim(), k=classify(v);
+  if(k.kind==="empty"){toast("Type something to search");return}
+  if(k.kind==="pan"){toast("Search by the last 4 digits or card token instead");return}
+  if(!$("#qreason").value){toast("Choose a reason for this lookup first");$("#qreason").focus();return}
+  log("Searched",k.kind==="wallet"?short(v):v,k.label+" · "+$("#qreason").value);
+  if(k.kind==="wallet") return go("wallet",v);
+  const a=state.alerts.find(x=>x.cid.toLowerCase()===v.toLowerCase()||x.name.toLowerCase().includes(v.toLowerCase())||(k.kind==="card"&&v==="4417"&&x.cid==="C-2291"));
+  if(a) return go("case",a.id);
+  toast("No customer found for "+v);
+}
+$("#qgo").onclick=doSearch; qi.addEventListener("keydown",e=>{if(e.key==="Enter")doSearch()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("#modal").classList.remove("open")});
+SCR.filter(x=>decisionOf(x)!=="release").forEach(raiseAlert);
+renderTenant();
+render();
+</script>
+</body>
+</html>

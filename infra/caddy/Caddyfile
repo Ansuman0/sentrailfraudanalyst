@@ -1,0 +1,17 @@
+# Reverse proxy for the single-VM deployment. Caddy gets and renews the Let's Encrypt certificates by itself.
+# Needs DNS A records for the three names pointing at this VM, and ports 80 + 443 open.
+{
+	email {$ACME_EMAIL:admin@sentrail.qatech.world}
+}
+
+{$APP_HOST} {
+	reverse_proxy web:8080
+}
+
+{$API_HOST} {
+	reverse_proxy api:8000
+}
+
+{$AUTH_HOST} {
+	reverse_proxy keycloak:8080
+}

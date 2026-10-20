@@ -1,0 +1,263 @@
+apiVersion: 1
+groups:
+- orgId: 1
+  name: sentrail
+  folder: Sentrail
+  interval: 1m
+  rules:
+  - uid: sentrail-5xx
+    title: API server errors
+    condition: C
+    for: 0s
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: More than 5 responses with status 500 or above in 5 minutes
+      action: Open the dashboard, look at Warnings and errors, take the request_id of a 5xx and read its log lines
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: sum(count_over_time({compose_service="api", event="api_request"} | json | status_code >= 500 [5m]))
+        queryType: instant
+        datasource: &id002
+          type: loki
+          uid: loki
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: &id001
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 5
+  - uid: sentrail-latency
+    title: API latency high
+    condition: C
+    for: 5m
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: p95 request latency above 2 seconds for 5 minutes (screening excluded)
+      action: Check Latency by route, then External services (slow chain APIs) and the database
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: quantile_over_time(0.95, {compose_service="api", event="api_request"} | json | path != "/screen" | unwrap duration_ms [5m])
+        queryType: instant
+        datasource: *id002
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: *id001
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 2000
+  - uid: sentrail-ready
+    title: Readiness probe failing
+    condition: C
+    for: 0s
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: '/readyz returned an error: the database or another required dependency is unreachable'
+      action: Check docker compose ps and the postgres logs; verify DATABASE_URL
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: sum(count_over_time({compose_service="api", event="api_request"} | json | path="/readyz" | status_code >= 400 [5m]))
+        queryType: instant
+        datasource: *id002
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: *id001
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+  - uid: sentrail-external
+    title: External service failures
+    condition: C
+    for: 0s
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: More than 3 failed calls to chain APIs or the OFAC list in 5 minutes
+      action: See Failures per service. While the OFAC list can't load, screening holds transfers by design
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: sum(count_over_time({compose_service="api", event="external_api_failure"} [5m]))
+        queryType: instant
+        datasource: *id002
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: *id001
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 3
+  - uid: sentrail-ai
+    title: AI requests failing
+    condition: C
+    for: 0s
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: More than 3 failed AI requests in 10 minutes
+      action: Check that Ollama is running and the model is pulled (docker compose ps)
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: sum(count_over_time({compose_service="api", event="ai_request_failed"} [10m]))
+        queryType: instant
+        datasource: *id002
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: *id001
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 3
+  - uid: sentrail-logins
+    title: Sign-in failures spike
+    condition: C
+    for: 0s
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: More than 20 failed sign-ins or second-factor checks in 5 minutes
+      action: 'Possible password guessing: review the audit log of the affected organizations; accounts lock after repeated failures'
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: loki
+      model:
+        refId: A
+        expr: sum(count_over_time({compose_service="api", event=~"audit_login_failed|audit_mfa_failed"} [5m]))
+        queryType: instant
+        datasource: *id002
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        datasource: *id001
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        datasource: *id001
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 20

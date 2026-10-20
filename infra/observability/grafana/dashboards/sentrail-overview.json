@@ -1,0 +1,460 @@
+{
+ "uid": "sentrail-overview",
+ "title": "Sentrail overview",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": false,
+ "refresh": "30s",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "tags": [
+  "sentrail"
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "request_id",
+    "type": "textbox",
+    "label": "request / trace id",
+    "query": ".*",
+    "current": {
+     "text": ".*",
+     "value": ".*"
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "Backend",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Requests per minute",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum(count_over_time({compose_service=\"api\", event=\"api_request\"} [1m]))",
+     "legendFormat": "requests",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Errors per minute (4xx / 5xx)",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum(count_over_time({compose_service=\"api\", event=\"api_request\"} | json | status_code >= 400 | status_code < 500 [1m]))",
+     "legendFormat": "4xx",
+     "queryType": "range"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum(count_over_time({compose_service=\"api\", event=\"api_request\"} | json | status_code >= 500 [1m]))",
+     "legendFormat": "5xx",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Latency p95 by route (ms)",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "quantile_over_time(0.95, {compose_service=\"api\", event=\"api_request\"} | json | unwrap duration_ms [5m]) by (path)",
+     "legendFormat": "{{path}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Failed sign-ins and second-factor failures",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum by (event) (count_over_time({compose_service=\"api\", event=~\"audit_login_failed|audit_mfa_failed|audit_refresh_token_reuse_detected\"} [5m]))",
+     "legendFormat": "{{event}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "row",
+   "title": "External services",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 17,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Calls per service",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum by (target_service) (count_over_time({compose_service=\"api\", event=~\"external_api_request|external_api_failure\"} | json [5m]))",
+     "legendFormat": "{{target_service}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 18,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "Failures per service",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum by (target_service, error_category) (count_over_time({compose_service=\"api\", event=\"external_api_failure\"} | json [5m]))",
+     "legendFormat": "{{target_service}} {{error_category}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 18,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "External latency p95 (ms)",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "quantile_over_time(0.95, {compose_service=\"api\", event=\"external_api_request\"} | json | unwrap duration_ms [5m]) by (target_service)",
+     "legendFormat": "{{target_service}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 26,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 10,
+   "type": "row",
+   "title": "AI",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "AI requests by outcome",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum(count_over_time({compose_service=\"api\", event=\"ai_request_completed\"} [5m]))",
+     "legendFormat": "completed",
+     "queryType": "range"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum(count_over_time({compose_service=\"api\", event=\"ai_request_failed\"} [5m]))",
+     "legendFormat": "failed",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 35,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "AI latency p95 (ms) by model",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "quantile_over_time(0.95, {compose_service=\"api\", event=\"ai_request_completed\"} | json | unwrap duration_ms [15m]) by (model)",
+     "legendFormat": "{{model}}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 35,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 13,
+   "type": "row",
+   "title": "Find a request",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 43,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 14,
+   "type": "logs",
+   "title": "Logs for the request / trace id in the variable above (.* shows everything)",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "{compose_service=\"api\"} | json | request_id=~\"$request_id\" or trace_id=~\"$request_id\"",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 44,
+    "w": 24,
+    "h": 10
+   },
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "enableLogDetails": true,
+    "sortOrder": "Descending"
+   }
+  },
+  {
+   "id": 15,
+   "type": "logs",
+   "title": "Warnings and errors",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "{compose_service=\"api\", level=~\"WARNING|ERROR|CRITICAL\"}",
+     "queryType": "range"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 54,
+    "w": 24,
+    "h": 10
+   },
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "enableLogDetails": true,
+    "sortOrder": "Descending"
+   }
+  }
+ ]
+}

@@ -1,0 +1,25 @@
+server {
+    listen 8080;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' ${API_ORIGIN}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        # add_header in a location drops the server-level ones, so repeat them.
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    location / {
+        add_header Cache-Control "no-store";
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self' ${API_ORIGIN}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        try_files $uri /index.html;
+    }
+}

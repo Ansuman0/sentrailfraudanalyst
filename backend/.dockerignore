@@ -1,0 +1,16 @@
+# Keep secrets, local environments and data out of the image (the API mounts data/ at run time).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+node_modules
+data
+tests
+*.md
+.dev-credentials.txt

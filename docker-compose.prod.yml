@@ -1,0 +1,33 @@
+# Single-VM deployment: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Adds HTTPS (Caddy) for sentrail.qatech.world, api.sentrail.qatech.world, auth.sentrail.qatech.world. See docs/DEPLOYMENT_DNS.md.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      APP_HOST: ${APP_HOST:-sentrail.qatech.world}
+      API_HOST: ${API_HOST:-api.sentrail.qatech.world}
+      AUTH_HOST: ${AUTH_HOST:-auth.sentrail.qatech.world}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ${CADDYFILE:-./infra/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports: ["80:80", "443:443"]
+    depends_on: [web, api, keycloak]
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak:
+    command: ["start", "--import-realm"]               # production mode: needs TLS or a proxy that sets the forwarded headers
+    environment:
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"                          # plain HTTP only inside the Docker network; Caddy terminates TLS
+    restart: unless-stopped
+
+  postgres: { restart: unless-stopped }
+  web: { restart: unless-stopped }
+  api: { restart: unless-stopped }
+
+volumes:
+  caddy-data:
+  caddy-config:

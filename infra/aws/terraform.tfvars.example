@@ -1,0 +1,3 @@
+aws_region = "ap-south-1"
+# route53_zone_id = "Z0123456789ABC"      # only if qatech.world DNS is hosted in Route 53
+# create_github_oidc_provider = false     # if the account already has the GitHub OIDC provider

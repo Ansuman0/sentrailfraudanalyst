@@ -1,0 +1,20 @@
+# Same routing as Caddyfile, but with Caddy's own local certificate authority (no Let's Encrypt, no public DNS needed).
+# Use with the hosts-file entries from docs/DEPLOYMENT_DNS.md ("Run on Docker Desktop").
+{
+	local_certs
+}
+
+{$APP_HOST} {
+	tls internal
+	reverse_proxy web:8080
+}
+
+{$API_HOST} {
+	tls internal
+	reverse_proxy api:8000
+}
+
+{$AUTH_HOST} {
+	tls internal
+	reverse_proxy keycloak:8080
+}

@@ -1,0 +1,17 @@
+# Known issues
+
+| ID | Title | Description / impact | Root cause | Workaround | Priority | Status |
+|---|---|---|---|---|---|---|
+| K-01 | Observability stack untested; no Prometheus/OTel | Loki/Alloy/Grafana profile, dashboard and 6 alert rules written 2026-10-17 but never started (Docker off); Alloy/Loki/Grafana configs only syntax-checked as YAML/JSON. No contact point configured. No DB, background-job or frontend-error events | Never run | `docker compose logs api` | High | Written, unverified |
+| K-02 | Request IDs and event logs | Fixed 2026-10-17: IDs in every log line, `api_request`, audit/login, external-call and AI-call events, React sends `X-Request-ID` + `traceparent`. Not yet: database-operation events, background jobs, frontend error reporting to the API | — | — | — | Fixed (remaining items go under K-01) |
+| K-03 | No CI | Nothing runs tests on change | Not set up | Run `backend/tests/run_all.sh` and `npm test` by hand | Medium | Written 2026-10-17, **never run** (needs a first green GitHub run) |
+| K-04 | Frontend container | Built and verified 2026-10-17 (healthy, headers, SPA fallback, non-root). Found and fixed: read-only root + root-owned tmpfs stopped nginx writing its config; Permissions-Policy missing on `/`. Not yet checked: the web app talking to the API from this container in a browser | — | — | — | Fixed (browser check pending) |
+| K-05 | LLM provider switch | Done 2026-10-17: `AI_PROVIDER` ollama / openai_compatible, external hosts blocked unless `AI_ALLOW_EXTERNAL=true` + https. Remaining: tested against stubs only; no fallback provider; no token-usage fields | — | — | Low | Mostly fixed |
+| K-06 | Unpinned compose images | `openbao/openbao:latest`, `ollama/ollama:latest` | Convenience | Pin before production | Low | Open |
+| K-07 | React admin screens incomplete | Users, Roles, Features, API keys and the two-factor switch done 2026-10-17 (Vitest only, never run against the live API). Missing: platform roles and platform staff (`/platform/roles`, `/platform/users`, `/platform/invitations`) | Not built | Use API | Medium | Partly done |
+| K-08 | SSO enforcement, passkey-only staff, data-region recheck not enforced; blind-index key not rotatable | See PROJECT_MEMORY | Stored, not enforced | — | Medium | Open |
+| K-09 | Keycloak/OpenBao/Ollama never run end to end here | Tests simulate them | Environment | — | Medium | Open |
+| K-10 | `/cases/{id}/investigate` makes 3 synchronous LLM calls | Slow request | No job queue | — | Low | Open |
+| K-11 | `.dev-credentials.txt` holds demo recovery codes in the project root | Git-ignored and docker-ignored; dev values only | Seed output location | Delete when done; never reuse | Low | Open (mitigated) |
+| K-12 | AWS pipeline never run | `deploy.yml`, `ci.yml` (per-service), `docker-compose.aws.yml`, `scripts/deploy.sh`, `infra/aws/*.tf` written 2026-10-18. Only checked: YAML parses, `bash -n`, compose merge, version-history logic in a scratch dir. Terraform not installed here (never validated/planned); no AWS account used; GitHub never ran the workflows | No AWS access / Terraform in this environment | Follow docs/DEPLOYMENT_AWS.md and fix what the first run shows | High | Written, unverified |
+| K-13 | GCP pipeline never run | `infra/gcp`, `deploy-gcp.yml`, `deploy-gcp.sh`, `docker-compose.gcp.yml` written 2026-10-18; only validate/fmt/`bash -n`/YAML checked. No GCP project or credentials used | No GCP access here | Follow docs/DEPLOYMENT_GCP.md, fix what the first run shows | High | Written, unverified |

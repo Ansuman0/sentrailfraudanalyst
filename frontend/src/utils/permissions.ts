@@ -1,0 +1,21 @@
+/**
+ * Organization permissions a custom role can hold, with the wording from docs/ROLES.md. The API is the source of truth
+ * (it rejects anything else); this list only gives checkboxes their labels. A permission the API returns that isn't
+ * listed here is still shown, under its raw id.
+ */
+export const ORG_PERMISSIONS: { id: string; label: string; sensitive?: boolean }[] = [
+  { id: "cases.view", label: "View alerts, cases and transfers" },
+  { id: "cases.decide", label: "Close alerts, request info" },
+  { id: "str.draft", label: "Run AI investigation and draft STRs" },
+  { id: "str.approve", label: "Approve and file STRs", sensitive: true },
+  { id: "screening.override", label: "Release or block held transfers", sensitive: true },
+  { id: "wallet.trace", label: "Trace wallets" },
+  { id: "policy.edit", label: "Change screening policy", sensitive: true },
+  { id: "data.export", label: "Export case data", sensitive: true },
+  { id: "audit.view", label: "View audit log" },
+  { id: "users.manage", label: "Invite and manage users" },
+  { id: "roles.manage", label: "Edit roles and permissions" },
+  { id: "features.manage", label: "Turn features on or off" },
+];
+
+export const permissionLabel = (id: string) => ORG_PERMISSIONS.find((p) => p.id === id)?.label ?? id;

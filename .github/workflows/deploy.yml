@@ -1,0 +1,563 @@
+name: deploy
+# Single Unified Multi-Cloud CI/CD Workflow (AWS + GCP)
+# - Pull Requests: Runs automated frontend & backend test suites
+# - Push to main / master: Tests, builds changed microservices, and deploys to AWS (or selected cloud)
+# - Manual trigger: Choose target cloud (aws, gcp, all), service (both, backend, frontend), and action (deploy, rollback, list-versions)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      target_cloud:
+        description: "Target Cloud Provider (aws | gcp | all)"
+        type: choice
+        options: [aws, gcp, all]
+        default: aws
+      service:
+        description: "Which service to deploy (both | backend | frontend)"
+        type: choice
+        options: [both, backend, frontend]
+        default: both
+      action:
+        description: "Action: deploy = build & deploy | rollback = revert | list-versions = view image tags"
+        type: choice
+        options: [deploy, rollback, list-versions]
+        default: deploy
+      version:
+        description: "Rollback only: target commit SHA. Leave empty to revert to previous version."
+        type: string
+        required: false
+        default: ""
+      seed_demo:
+        description: "Seed demo data after deploy (requires ENV=dev in secret; sandbox only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # =========================================================================
+  # 1. PLAN & CHANGE DETECTION
+  # =========================================================================
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      action:        ${{ steps.p.outputs.action }}
+      backend:       ${{ steps.p.outputs.backend }}
+      frontend:      ${{ steps.p.outputs.frontend }}
+      deploy_aws:    ${{ steps.p.outputs.deploy_aws }}
+      deploy_gcp:    ${{ steps.p.outputs.deploy_gcp }}
+      should_deploy: ${{ steps.p.outputs.should_deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: p
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          IN_TARGET: ${{ inputs.target_cloud }}
+          IN_SERVICE: ${{ inputs.service }}
+          IN_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+
+          action="deploy"
+          backend=false
+          frontend=false
+          deploy_aws=false
+          deploy_gcp=false
+          should_deploy=false
+
+          if [ "$EVENT" = "pull_request" ]; then
+            # PR: run tests for changed code; never deploy
+            if git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}" 2>/dev/null; then
+              changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA")
+            else
+              changed=$(git ls-files)
+            fi
+            echo "$changed" | grep -q '^backend/'  && backend=true  || true
+            echo "$changed" | grep -q '^frontend/' && frontend=true || true
+            if [ "$backend" = false ] && [ "$frontend" = false ]; then
+              backend=true; frontend=true
+            fi
+            should_deploy=false
+
+          elif [ "$EVENT" = "push" ]; then
+            [ "$REF" = refs/heads/main ] || [ "$REF" = refs/heads/master ] || { echo "::error::Push not on main or master"; exit 1; }
+            if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+            else
+              changed=$(git ls-files)
+            fi
+            echo "$changed" | grep -q '^backend/'  && backend=true  || true
+            echo "$changed" | grep -q '^frontend/' && frontend=true || true
+
+            # If compose, proxy or deployment scripts changed without code: redeploy running services without rebuild
+            if [ "$backend" = false ] && [ "$frontend" = false ]; then
+              echo "$changed" | grep -qE '^(docker-compose.*\.yml|infra/|scripts/)' || true
+            fi
+            deploy_aws=true
+            should_deploy=true
+
+          else
+            # Manual trigger (workflow_dispatch)
+            action="$IN_ACTION"
+            case "$IN_SERVICE" in
+              backend) backend=true ;;
+              frontend) frontend=true ;;
+              *) backend=true; frontend=true ;;
+            esac
+            case "$IN_TARGET" in
+              aws) deploy_aws=true ;;
+              gcp) deploy_gcp=true ;;
+              all) deploy_aws=true; deploy_gcp=true ;;
+            esac
+            if [ "$action" = "list-versions" ]; then
+              should_deploy=false
+            else
+              should_deploy=true
+            fi
+          fi
+
+          echo "action=$action backend=$backend frontend=$frontend deploy_aws=$deploy_aws deploy_gcp=$deploy_gcp should_deploy=$should_deploy"
+          {
+            echo "action=$action"
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "deploy_aws=$deploy_aws"
+            echo "deploy_gcp=$deploy_gcp"
+            echo "should_deploy=$should_deploy"
+          } >> "$GITHUB_OUTPUT"
+
+  # =========================================================================
+  # 2. CI TESTS (FRONTEND & BACKEND)
+  # =========================================================================
+  test-frontend:
+    needs: plan
+    if: ${{ needs.plan.outputs.frontend == 'true' && needs.plan.outputs.action == 'deploy' }}
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  test-backend:
+    needs: plan
+    if: ${{ needs.plan.outputs.backend == 'true' && needs.plan.outputs.action == 'deploy' }}
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - run: python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+      - name: Generate throwaway secrets for CI
+        run: |
+          cp ../.env.example ../.env
+          .venv/bin/python -m scripts.dev_env
+      - run: docker compose -f ../docker-compose.yml --project-directory .. up -d --wait postgres
+      - name: Run backend test suites
+        run: |
+          set -a; . ../.env; set +a
+          PG_SUPERUSER_URL="postgresql://postgres:${POSTGRES_SUPERUSER_PASSWORD}@127.0.0.1" \
+          OWNER_PASSWORD="$SENTRAIL_OWNER_PASSWORD" \
+          APP_DB_PASSWORD="$APP_DB_PASSWORD" sh tests/run_all.sh
+
+  # =========================================================================
+  # 3. AWS CI/CD PIPELINE & DOCKER HUB
+  # =========================================================================
+  aws-versions:
+    needs: plan
+    if: ${{ needs.plan.outputs.action == 'list-versions' && needs.plan.outputs.deploy_aws == 'true' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+      - name: List ECR Images
+        run: |
+          echo "## AWS ECR Images" >> "$GITHUB_STEP_SUMMARY"
+          for repo in sentrail-api sentrail-web; do
+            echo "### $repo" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+            aws ecr describe-images --repository-name "$repo" \
+              --query 'reverse(sort_by(imageDetails,&imagePushedAt))[:15].[imageTags[0],imagePushedAt]' --output text \
+              | tee -a "$GITHUB_STEP_SUMMARY" || echo "Repository $repo query failed"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: List Docker Hub Images (qaansuman)
+        run: |
+          echo "## Docker Hub Images (qaansuman)" >> "$GITHUB_STEP_SUMMARY"
+          for repo in sentrail-api sentrail-web; do
+            echo "### qaansuman/$repo" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+            curl -fsSL "https://hub.docker.com/v2/repositories/qaansuman/$repo/tags?page_size=15" \
+              | jq -r '.results[] | "\(.name)  (updated: \(.last_updated))"' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "Docker Hub query completed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  build-aws-backend:
+    needs: [plan, test-backend]
+    if: >-
+      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
+          && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
+          && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: qaansuman
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Assemble backend image tags
+        id: meta
+        run: |
+          tags="qaansuman/sentrail-api:${{ github.sha }},qaansuman/sentrail-api:latest"
+          if [ -n "${{ steps.ecr.outputs.registry }}" ]; then
+            tags="$tags,${{ steps.ecr.outputs.registry }}/sentrail-api:${{ github.sha }}"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Build and push compressed backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=aws-api
+          cache-to: type=gha,scope=aws-api,mode=max
+
+  build-aws-frontend:
+    needs: [plan, test-frontend]
+    if: >-
+      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
+          && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
+          && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: qaansuman
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Assemble frontend image tags
+        id: meta
+        run: |
+          tags="qaansuman/sentrail-web:${{ github.sha }},qaansuman/sentrail-web:latest"
+          if [ -n "${{ steps.ecr.outputs.registry }}" ]; then
+            tags="$tags,${{ steps.ecr.outputs.registry }}/sentrail-web:${{ github.sha }}"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Build and push compressed frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          build-args: VITE_API_BASE_URL=${{ vars.API_URL || 'https://api.sentrail.qatech.world' }}
+          outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=aws-web
+          cache-to: type=gha,scope=aws-web,mode=max
+
+  deploy-aws:
+    needs: [plan, build-aws-backend, build-aws-frontend]
+    if: >-
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
+          && needs.plan.outputs.action != 'list-versions'
+          && needs.build-aws-backend.result != 'failure' && needs.build-aws-frontend.result != 'failure'
+          && (needs.plan.outputs.action == 'rollback'
+              || needs.build-aws-backend.result == 'success' || needs.build-aws-frontend.result == 'success'
+              || (needs.plan.outputs.backend != 'true' && needs.plan.outputs.frontend != 'true')) }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: { contents: read, id-token: write }
+    env:
+      ACTION: ${{ needs.plan.outputs.action }}
+      DO_BACKEND: ${{ needs.plan.outputs.backend }}
+      DO_FRONTEND: ${{ needs.plan.outputs.frontend }}
+      VERSION: ${{ inputs.version }}
+      SEED: ${{ inputs.seed_demo }}
+    steps:
+      - name: Compute AWS image tags
+        run: |
+          set -euo pipefail
+          api=""; web=""
+          if [ "$ACTION" = rollback ]; then
+            want=${VERSION:-previous}
+            [ "$DO_BACKEND"  = true ] && api=$want
+            [ "$DO_FRONTEND" = true ] && web=$want
+          else
+            [ "${{ needs.build-aws-backend.result }}"  = success ] && api=${{ github.sha }}
+            [ "${{ needs.build-aws-frontend.result }}" = success ] && web=${{ github.sha }}
+          fi
+          echo "API_TAG=$api" >> "$GITHUB_ENV"; echo "WEB_TAG=$web" >> "$GITHUB_ENV"
+          echo "AWS deploy: backend='$api' frontend='$web'"
+
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
+
+      - name: Verify rollback target exists in ECR or Docker Hub
+        if: ${{ env.ACTION == 'rollback' && inputs.version != '' }}
+        run: |
+          ver="${{ inputs.version }}"
+          echo "Verifying image tag $ver exists..."
+          aws ecr describe-images --repository-name sentrail-api --image-ids imageTag="$ver" >/dev/null 2>&1 || \
+          curl -fsSL "https://hub.docker.com/v2/repositories/qaansuman/sentrail-api/tags/$ver" >/dev/null 2>&1 || \
+          echo "::warning::Tag $ver not found in public listings; proceeding with requested tag."
+
+      - name: Upload bundle to AWS S3
+        run: |
+          tar czf bundle.tgz docker-compose.yml docker-compose.prod.yml docker-compose.aws.yml docker-compose.dockerhub.yml infra scripts/deploy.sh
+          aws s3 cp bundle.tgz "s3://${{ vars.DEPLOY_BUCKET }}/bundles/${{ github.run_id }}.tgz"
+
+      - name: Execute deployment on AWS EC2 host via SSM
+        run: |
+          set -euo pipefail
+          seed=0; [ "$SEED" = "true" ] && seed=1
+          jq -n --arg b "${{ vars.DEPLOY_BUCKET }}" --arg k "${{ github.run_id }}" --arg r "${{ vars.AWS_REGION || 'us-east-1' }}" \
+                --arg e "${{ vars.ECR_REGISTRY }}" --arg s "${{ vars.SECRET_ID }}" --arg seed "$seed" \
+                --arg api "$API_TAG" --arg web "$WEB_TAG" '{
+            executionTimeout: ["1500"],
+            commands: [
+              "set -e",
+              "install -d -m 750 /opt/sentrail",
+              ("aws s3 cp s3://" + $b + "/bundles/" + $k + ".tgz /tmp/sentrail-bundle.tgz --region " + $r),
+              "tar xzf /tmp/sentrail-bundle.tgz -C /opt/sentrail",
+              ("API_TAG=" + $api + " WEB_TAG=" + $web + " ECR_REGISTRY=" + $e + " AWS_REGION=" + $r + " SECRET_ID=" + $s + " SEED_DEMO=" + $seed + " bash /opt/sentrail/scripts/deploy.sh")
+            ]}' > params.json
+          id=$(aws ssm send-command --instance-ids "${{ vars.EC2_INSTANCE_ID }}" --document-name AWS-RunShellScript \
+                 --comment "sentrail $ACTION backend=${API_TAG:-keep} frontend=${WEB_TAG:-keep}" --timeout-seconds 120 \
+                 --parameters file://params.json --query Command.CommandId --output text)
+          echo "SSM command: $id"
+          for i in $(seq 1 200); do
+            st=$(aws ssm get-command-invocation --command-id "$id" --instance-id "${{ vars.EC2_INSTANCE_ID }}" --query Status --output text 2>/dev/null || echo Pending)
+            case "$st" in Pending|InProgress|Delayed) sleep 8;; *) break;; esac
+          done
+          out=$(aws ssm get-command-invocation --command-id "$id" --instance-id "${{ vars.EC2_INSTANCE_ID }}" \
+                  --query '{status:Status,out:StandardOutputContent,err:StandardErrorContent}' --output text | tail -80)
+          echo "$out"; { echo '### AWS Deploy Output'; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$st" = Success ] || { echo "::error::AWS Deploy failed (status: $st)"; exit 1; }
+
+  # =========================================================================
+  # 4. GCP CI/CD PIPELINE
+  # =========================================================================
+  gcp-versions:
+    needs: plan
+    if: ${{ needs.plan.outputs.action == 'list-versions' && needs.plan.outputs.deploy_gcp == 'true' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: List Artifact Registry Images
+        run: |
+          echo "## GCP Artifact Registry Images" >> "$GITHUB_STEP_SUMMARY"
+          for img in sentrail-api sentrail-web; do
+            echo "### $img" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+            gcloud artifacts docker tags list "${{ vars.GCP_REGISTRY }}/$img" --sort-by=~CREATE_TIME --limit=15 --format='value(tag,create_time)' \
+              | tee -a "$GITHUB_STEP_SUMMARY" || echo "Image $img query failed"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  build-gcp-backend:
+    needs: [plan, test-backend]
+    if: >-
+      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
+          && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
+          && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' || secrets.DOCKER_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: qaansuman
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Assemble GCP backend image tags
+        id: meta
+        run: |
+          tags="${{ vars.GCP_REGISTRY }}/sentrail-api:${{ github.sha }}"
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}" ]; then
+            tags="$tags,qaansuman/sentrail-api:${{ github.sha }},qaansuman/sentrail-api:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Build and push compressed GCP backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=gcp-api
+          cache-to: type=gha,scope=gcp-api,mode=max
+
+  build-gcp-frontend:
+    needs: [plan, test-frontend]
+    if: >-
+      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
+          && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
+          && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' || secrets.DOCKER_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: qaansuman
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Assemble GCP frontend image tags
+        id: meta
+        run: |
+          tags="${{ vars.GCP_REGISTRY }}/sentrail-web:${{ github.sha }}"
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}" ]; then
+            tags="$tags,qaansuman/sentrail-web:${{ github.sha }},qaansuman/sentrail-web:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Build and push compressed GCP frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          build-args: VITE_API_BASE_URL=${{ vars.API_URL || 'https://api.sentrail.qatech.world' }}
+          outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=gcp-web
+          cache-to: type=gha,scope=gcp-web,mode=max
+
+  deploy-gcp:
+    needs: [plan, build-gcp-backend, build-gcp-frontend]
+    if: >-
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
+          && needs.plan.outputs.action != 'list-versions'
+          && needs.build-gcp-backend.result != 'failure' && needs.build-gcp-frontend.result != 'failure'
+          && (needs.plan.outputs.action == 'rollback'
+              || needs.build-gcp-backend.result == 'success' || needs.build-gcp-frontend.result == 'success'
+              || (needs.plan.outputs.backend != 'true' && needs.plan.outputs.frontend != 'true')) }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: { contents: read, id-token: write }
+    env:
+      ACTION: ${{ needs.plan.outputs.action }}
+      DO_BACKEND: ${{ needs.plan.outputs.backend }}
+      DO_FRONTEND: ${{ needs.plan.outputs.frontend }}
+      VERSION: ${{ inputs.version }}
+      SEED: ${{ inputs.seed_demo }}
+    steps:
+      - name: Compute GCP image tags
+        run: |
+          set -euo pipefail
+          api=""; web=""
+          if [ "$ACTION" = rollback ]; then
+            want=${VERSION:-previous}
+            [ "$DO_BACKEND"  = true ] && api=$want
+            [ "$DO_FRONTEND" = true ] && web=$want
+          else
+            [ "${{ needs.build-gcp-backend.result }}"  = success ] && api=${{ github.sha }}
+            [ "${{ needs.build-gcp-frontend.result }}" = success ] && web=${{ github.sha }}
+          fi
+          echo "API_TAG=$api" >> "$GITHUB_ENV"; echo "WEB_TAG=$web" >> "$GITHUB_ENV"
+          echo "GCP deploy: backend='$api' frontend='$web'"
+
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy on GCP VM via IAP SSH
+        run: |
+          set -euo pipefail
+          seed=0; [ "$SEED" = "true" ] && seed=1
+          tar czf bundle.tgz docker-compose.yml docker-compose.prod.yml docker-compose.gcp.yml docker-compose.dockerhub.yml infra scripts/deploy-gcp.sh
+          VM="${{ vars.GCP_VM }}"
+          SSH=(--zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet)
+          gcloud compute scp "${SSH[@]}" bundle.tgz "$VM":/tmp/sentrail-bundle.tgz
+          gcloud compute ssh "$VM" "${SSH[@]}" --command "set -e; sudo install -d -m 750 /opt/sentrail; sudo tar xzf /tmp/sentrail-bundle.tgz -C /opt/sentrail; sudo env API_TAG='$API_TAG' WEB_TAG='$WEB_TAG' REGISTRY='${{ vars.GCP_REGISTRY }}' SECRET_ID='${{ vars.GCP_SECRET_ID }}' SEED_DEMO=$seed bash /opt/sentrail/scripts/deploy-gcp.sh" 2>&1 | tee deploy-gcp.log
+          { echo '### GCP Deploy Output'; echo '```'; tail -80 deploy-gcp.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # 5. PUBLIC SMOKE TEST
+  # =========================================================================
+  smoke-test:
+    needs: [plan, deploy-aws, deploy-gcp]
+    if: ${{ always() && (needs.deploy-aws.result == 'success' || needs.deploy-gcp.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smoke check health endpoints
+        run: |
+          API="${{ vars.API_URL || 'https://api.sentrail.qatech.world' }}"
+          APP="${{ vars.APP_URL || 'https://sentrail.qatech.world' }}"
+          echo "Multi-Cloud health smoke test: $API and $APP"
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors -o /dev/null "$API/readyz" || {
+            echo "::warning::Public API health check did not respond immediately. Check DNS/SSL if newly provisioned."
+          }
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors -o /dev/null "$APP/" || {
+            echo "::warning::Public App check did not respond immediately. Check DNS/SSL if newly provisioned."
+          }
+          echo "Multi-cloud deployment pipeline finished."

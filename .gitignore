@@ -1,0 +1,60 @@
+# ---- Secrets: never commit ----
+.env
+.env.*
+prod.env
+*.env
+!.env.example
+!frontend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.dev-credentials.txt
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Node / React ----
+node_modules/
+frontend/dist/
+frontend/coverage/
+*.tsbuildinfo
+npm-debug.log*
+
+# ---- Data and generated artifacts (per-organization data is personal data) ----
+backend/data/orgs/
+backend/data/chroma/
+backend/data/*.parquet
+backend/data/*.csv
+!backend/data/watchlist.csv
+backend/data/*.json
+backend/data/*.joblib
+backend/data/guidance/*.pdf
+
+# ---- Logs, OS and editor files ----
+*.log
+logs/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- Terraform ----
+infra/aws/.terraform/
+*.tfstate
+*.tfstate.*
+infra/aws/terraform.tfvars
+aws_credentials.env

@@ -1,0 +1,21 @@
+# Docker Hub deployment overlay: pull compressed images from Docker Hub (qaansuman/sentrail-*)
+#   docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.dockerhub.yml up -d --no-build ...
+# .deploy.env holds API_TAG and WEB_TAG: commit SHAs or 'latest'
+services:
+  migrate:                                                 # schema migrations runner
+    image: qaansuman/sentrail-api:${API_TAG:-latest}
+    pull_policy: always
+
+  api:
+    image: qaansuman/sentrail-api:${API_TAG:-latest}
+    pull_policy: always
+    volumes:
+      - api-data:/srv/data
+
+  web:
+    image: qaansuman/sentrail-web:${WEB_TAG:-latest}
+    pull_policy: always
+
+volumes:
+  api-data:
+

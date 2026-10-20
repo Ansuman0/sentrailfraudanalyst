@@ -1,0 +1,45 @@
+// Collects the stdout logs of this compose project's containers and ships them to Loki.
+// Labels are kept few on purpose (service, level, event): request_id and trace_id stay in the log line,
+// where they are searched with {service="api"} | json | request_id="..." without exploding Loki's index.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project"]
+  }
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.process.json.receiver]
+}
+
+loki.process "json" {
+  // Only the API writes our JSON format; other containers pass through unparsed.
+  stage.match {
+    selector = "{compose_service=\"api\"}"
+    stage.json {
+      expressions = { level = "level", event = "event", service = "service" }
+    }
+    stage.labels {
+      values = { level = "", event = "", service = "" }
+    }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

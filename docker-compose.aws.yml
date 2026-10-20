@@ -1,0 +1,21 @@
+# AWS deployment overlay: run the images that the GitHub pipeline pushed to ECR instead of building on the server.
+#   docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml up -d --no-build ...
+# .deploy.env (written by scripts/deploy.sh) holds ECR_REGISTRY, API_TAG and WEB_TAG: the backend and the frontend are versioned
+# and rolled back separately. See docs/DEPLOYMENT_AWS.md.
+services:
+  migrate:                                                 # same image as the API
+    image: ${ECR_REGISTRY:?set by scripts/deploy.sh}/sentrail-api:${API_TAG:?set by scripts/deploy.sh}
+    pull_policy: always
+
+  api:
+    image: ${ECR_REGISTRY:?set by scripts/deploy.sh}/sentrail-api:${API_TAG:?set by scripts/deploy.sh}
+    pull_policy: always
+    volumes:
+      - api-data:/srv/data                                 # named volume instead of ./backend/data (the repo is not on the server)
+
+  web:
+    image: ${ECR_REGISTRY:?set by scripts/deploy.sh}/sentrail-web:${WEB_TAG:?set by scripts/deploy.sh}
+    pull_policy: always
+
+volumes:
+  api-data:

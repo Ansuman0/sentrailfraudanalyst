@@ -1,0 +1,4 @@
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"
+# dns_zone_name = "qatech-world"      # only if qatech.world DNS is hosted in Cloud DNS in this project

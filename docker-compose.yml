@@ -1,0 +1,134 @@
+# Local and demo stack. Production settings: SECURITY.md and docs/LOCAL_DEVELOPMENT.md ("Environments").
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set in .env}
+      SENTRAIL_OWNER_PASSWORD: ${SENTRAIL_OWNER_PASSWORD:?set in .env}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro       # creates the sentrail and keycloak databases
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    ports: ["127.0.0.1:5432:5432"]
+
+  migrate:                                             # applies backend/migrations/ once, then exits
+    build: ./backend
+    command: python -m scripts.migrate
+    environment:
+      OWNER_DATABASE_URL: postgresql://sentrail_owner:${SENTRAIL_OWNER_PASSWORD}@postgres:5432/sentrail
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set in .env}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  keycloak:                                            # open-source identity provider
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]           # production: "start --optimized" behind TLS
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:?set in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set in .env}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: ${KEYCLOAK_URL:-http://localhost:8080}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"                          # dev only; terminate TLS at your proxy in production
+      SENTRAIL_WEB_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?set in .env}
+      SENTRAIL_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?set in .env}
+      SENTRAIL_API_URL: ${API_URL:-http://localhost:8000}
+      SENTRAIL_APP_URL: ${APP_URL:-http://localhost:5173}
+    volumes:
+      - ./infra/keycloak/realm-sentrail.json:/opt/keycloak/data/import/realm-sentrail.json:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:8080:8080"]
+
+  openbao:                                             # key management (open-source Vault fork)
+    image: openbao/openbao:latest
+    command: server -dev -dev-root-token-id=${BAO_DEV_TOKEN:-dev-only-token}   # dev mode only
+    cap_add: [IPC_LOCK]
+    ports: ["127.0.0.1:8200:8200"]
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes: ["ollama:/root/.ollama"]
+
+  web:                                               # React app on http://localhost:5173 (stop `npm run dev` first: same port)
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${API_URL:-http://localhost:8000}
+    environment:
+      API_ORIGIN: ${API_URL:-http://localhost:8000}
+    ports: ["127.0.0.1:5173:8080"]
+    read_only: true
+    tmpfs: ["/tmp", "/etc/nginx/conf.d:uid=101,gid=101,mode=755"]   # the image renders its nginx config from the template at start-up (as uid 101)
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://sentrail_app:${APP_DB_PASSWORD}@postgres:5432/sentrail
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      keycloak: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 10s
+    ports: ["127.0.0.1:8000:8000"]
+    read_only: true                                  # code is read-only; data/ is the one writable mount
+    tmpfs: ["/tmp"]
+    volumes:
+      - ./backend/data:/srv/data                             # per-organization datasets, model, watchlist, Chroma index
+    security_opt: ["no-new-privileges:true"]
+
+  # ---- Observability (opt-in): docker compose --profile observability up -d   then http://localhost:3000 ----
+  loki:
+    profiles: [observability]
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./infra/observability/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    security_opt: ["no-new-privileges:true"]          # not published to the host: only alloy and grafana reach it
+
+  alloy:                                              # reads container logs through the Docker socket (read-only mount;
+    profiles: [observability]                         # the socket is still powerful: use this profile on dev machines only)
+    image: grafana/alloy:v1.4.2
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./infra/observability/alloy.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+    security_opt: ["no-new-privileges:true"]
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [loki]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  pgdata:
+  ollama:
+  loki-data:
+  grafana-data:
