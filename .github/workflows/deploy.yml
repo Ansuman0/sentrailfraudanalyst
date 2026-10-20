@@ -79,7 +79,7 @@ jobs:
           should_deploy=false
 
           if [ "$EVENT" = "pull_request" ]; then
-            # PR: run tests for changed code; never deploy
+            # PR: run tests for all changed code; never deploy
             if git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}" 2>/dev/null; then
               changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA")
             else
@@ -87,6 +87,7 @@ jobs:
             fi
             echo "$changed" | grep -q '^backend/'  && backend=true  || true
             echo "$changed" | grep -q '^frontend/' && frontend=true || true
+            # If no specific service changed, test both
             if [ "$backend" = false ] && [ "$frontend" = false ]; then
               backend=true; frontend=true
             fi
@@ -94,18 +95,23 @@ jobs:
 
           elif [ "$EVENT" = "push" ]; then
             [ "$REF" = refs/heads/main ] || [ "$REF" = refs/heads/master ] || { echo "::error::Push not on main or master"; exit 1; }
+
+            # Detect changed files; on first commit BEFORE is the zero SHA so fall back to all files
             if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
             else
               changed=$(git ls-files)
             fi
+
             echo "$changed" | grep -q '^backend/'  && backend=true  || true
             echo "$changed" | grep -q '^frontend/' && frontend=true || true
 
-            # If compose, proxy or deployment scripts changed without code: redeploy running services without rebuild
+            # If nothing in backend/ or frontend/ changed, check if infra/compose/scripts changed
+            # and deploy both services (config-only redeploy). If truly nothing changed, deploy both anyway.
             if [ "$backend" = false ] && [ "$frontend" = false ]; then
-              echo "$changed" | grep -qE '^(docker-compose.*\.yml|infra/|scripts/)' || true
+              backend=true; frontend=true
             fi
+
             deploy_aws=true
             should_deploy=true
 
@@ -113,14 +119,15 @@ jobs:
             # Manual trigger (workflow_dispatch)
             action="$IN_ACTION"
             case "$IN_SERVICE" in
-              backend) backend=true ;;
+              backend)  backend=true ;;
               frontend) frontend=true ;;
-              *) backend=true; frontend=true ;;
+              *)        backend=true; frontend=true ;;
             esac
             case "$IN_TARGET" in
               aws) deploy_aws=true ;;
               gcp) deploy_gcp=true ;;
               all) deploy_aws=true; deploy_gcp=true ;;
+              *)   deploy_aws=true ;;
             esac
             if [ "$action" = "list-versions" ]; then
               should_deploy=false
@@ -217,9 +224,9 @@ jobs:
   build-aws-backend:
     needs: [plan, test-backend]
     if: >-
-      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
-          && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') }}
+          && needs.test-backend.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
@@ -259,9 +266,9 @@ jobs:
   build-aws-frontend:
     needs: [plan, test-frontend]
     if: >-
-      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_aws == 'true'
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
-          && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') }}
+          && needs.test-frontend.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
@@ -411,9 +418,9 @@ jobs:
   build-gcp-backend:
     needs: [plan, test-backend]
     if: >-
-      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
-          && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') }}
+          && needs.test-backend.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
@@ -447,9 +454,9 @@ jobs:
   build-gcp-frontend:
     needs: [plan, test-frontend]
     if: >-
-      ${{ needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
+      ${{ !cancelled() && needs.plan.outputs.should_deploy == 'true' && needs.plan.outputs.deploy_gcp == 'true'
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
-          && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') }}
+          && needs.test-frontend.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
