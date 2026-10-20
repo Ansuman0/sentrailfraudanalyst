@@ -379,7 +379,7 @@ jobs:
               ("API_TAG=" + $api + " WEB_TAG=" + $web + " ECR_REGISTRY=" + $e + " AWS_REGION=" + $r + " SECRET_ID=" + $s + " SEED_DEMO=" + $seed + " bash /opt/sentrail/scripts/deploy.sh")
             ]}' > params.json
           id=$(aws ssm send-command --instance-ids "${{ vars.EC2_INSTANCE_ID }}" --document-name AWS-RunShellScript \
-                 --comment "sentrail $ACTION backend=${API_TAG:-keep} frontend=${WEB_TAG:-keep}" --timeout-seconds 120 \
+                 --comment "sentrail $ACTION be=${API_TAG:0:12} fe=${WEB_TAG:0:12}" --timeout-seconds 120 \
                  --parameters file://params.json --query Command.CommandId --output text)
           echo "SSM command: $id"
           for i in $(seq 1 200); do
