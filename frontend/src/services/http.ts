@@ -10,7 +10,33 @@
  */
 import type { TokenResponse } from "../types/api";
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/+$/, "");
+/**
+ * Picks the API base for the page that is open. The configured URL (VITE_API_BASE_URL, e.g. https://api.sentrail.qatech.world)
+ * is used on the app's own domain and in local development. If the page is opened from some other host (the AWS public
+ * hostname while the domain's DNS is still propagating), the API is reached on that same origin under /api, where the
+ * reverse proxy forwards it (infra/caddy/Caddyfile), so the app works without the domain.
+ */
+export function resolveApiBase(configured: string, pageHost: string, pageOrigin: string): string {
+  const base = configured.replace(/\/+$/, "");
+  let apiHost: string;
+  try {
+    apiHost = new URL(base).hostname;
+  } catch {
+    return base;
+  }
+  const isLocal = (h: string) => h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
+  if (isLocal(apiHost) || isLocal(pageHost)) return base;
+  // The app host is the API host without its first label (api.sentrail.qatech.world -> sentrail.qatech.world).
+  const appHost = apiHost.split(".").slice(1).join(".");
+  if (!appHost || pageHost === apiHost || pageHost === appHost || pageHost.endsWith("." + appHost)) return base;
+  return `${pageOrigin}/api`;
+}
+
+export const API_BASE_URL = resolveApiBase(
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000",
+  typeof window === "undefined" ? "localhost" : window.location.hostname,
+  typeof window === "undefined" ? "http://localhost" : window.location.origin,
+);
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail?: unknown) {

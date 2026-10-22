@@ -108,7 +108,22 @@ Public names, all pointing at the **Elastic IP** (`terraform output elastic_ip`)
 4. Check: `https://sentrail.qatech.world` loads, `https://api.sentrail.qatech.world/readyz` is OK, sign-in keeps its cookie after a reload,
    and `https://auth.sentrail.qatech.world/realms/sentrail/.well-known/openid-configuration` answers.
 
+### Opening the app before the domain works (fallback URL)
+`scripts/deploy.sh` reads the host's AWS public hostname and Caddy serves the whole app there too (Let's Encrypt certificate, same as the domain):
+`https://ec2-<elastic-ip-with-dashes>.compute-1.amazonaws.com` (the deploy log prints it as `fallback URL`; `terraform output elastic_ip` gives the IP).
+The web app notices it is not on `qatech.world` and calls the API on the same address under `/api`. Password sign-in works; SSO via Keycloak
+still redirects to `auth.sentrail.qatech.world`. Visiting the bare IP over http redirects to the hostname. If the domain does not open on your PC but the
+fallback does, check DNS (`nslookup sentrail.qatech.world 8.8.8.8`) and the Windows hosts file (`C:\Windows\System32\drivers\etc\hosts`) for leftover
+`127.0.0.1 sentrail.qatech.world …` lines. The instance must be running (stopped instances serve nothing; the Elastic IP is kept).
+
 ## Operating it
+
+### Stopping and starting the instance (saving credits)
+Stop the instance in the EC2 console when you don't need it; start it again later. Data (Postgres, API files, certificates) is on the 30 GB
+encrypted root disk and is kept; the Elastic IP is kept (it costs a little while the instance is stopped, nothing while running). After the
+deploy has run once, `sentrail.service` starts the whole stack in order at boot from the local images, so the site is back 2–5 minutes after the
+instance shows "running", without GitHub. The disk is the only copy of the data besides the daily snapshots: never terminate the instance.
+Free tier covers 30 GB of EBS in total, so no second data disk is attached.
 
 - Logs/shell on the host, no SSH: `aws ssm start-session --target <instance id>`, then `cd /opt/sentrail && docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml logs -f api`.
 - What is running: `cat /opt/sentrail/.deploy.env` (never `.env`).

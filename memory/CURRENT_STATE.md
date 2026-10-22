@@ -80,6 +80,10 @@ Written, never run (K-12): push to `main` deploys only the changed service (back
 
 Written, never run (K-13): `infra/gcp`, `docker-compose.gcp.yml`, `scripts/deploy-gcp.sh`, `.github/workflows/deploy-gcp.yml` (manual only), [docs/DEPLOYMENT_GCP.md](../docs/DEPLOYMENT_GCP.md). 8 GB VM, 30 GB disk. `ci.yml` restored. AWS: `terraform plan` OK (3 to add, 30 GB disk, m7i-flex.large), apply blocked/not run; AWS creds in git-ignored `aws_credentials.env`.
 
+
+
+## AWS live state and fallback URL (2026-10-22)
+Terraform applied (state in `infra/aws`), images in ECR, DNS at Namecheap resolves to the EIP. Instance had been stopped; restarted. Fallback (`https://ec2-<ip>.compute-1.amazonaws.com`) written and tested locally, awaiting a deploy run. Password sign-in works on the fallback; SSO (Keycloak) still uses the domain names. Developer PC hosts file must not map the domain to 127.0.0.1 when testing AWS.
 ## Consolidated Single Multi-Cloud Pipeline (2026-10-20)
 
 - Merged CI testing, AWS deployment, and GCP deployment into a single all-in-one file: [`.github/workflows/deploy.yml`](file:///d:/AIworkspase/sentrail/sentrailfraudanalyst/.github/workflows/deploy.yml).

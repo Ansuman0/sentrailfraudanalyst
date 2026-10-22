@@ -44,7 +44,12 @@ case "$(val APP_URL)$(val API_URL)$(val KEYCLOAK_URL)" in *localhost*|*127.0.0.1
 if grep -qE '^CADDYFILE=.*local' .env.new; then rm -f .env.new; fail "CADDYFILE points at the local-certificate file"; fi
 mv .env.new .env
 
-printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\n' "$ECR_REGISTRY" "$API_NEW" "$WEB_NEW" > .deploy.env
+# AWS public hostname of this host (IMDSv2), served as a fallback while the domain's DNS is still propagating.
+IMDS_TOKEN=$(curl -fsS -m 3 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)
+FALLBACK_HOST=$(curl -fsS -m 3 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-hostname 2>/dev/null || true)
+FALLBACK_HOST=${FALLBACK_HOST:-localhost}
+printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\n' "$ECR_REGISTRY" "$API_NEW" "$WEB_NEW" "$FALLBACK_HOST" > .deploy.env
+echo "== fallback URL: https://$FALLBACK_HOST"
 
 if [[ "$ECR_REGISTRY" == *"amazonaws.com"* ]]; then
   echo "== logging in to AWS ECR, pulling images"
@@ -55,6 +60,37 @@ fi
 DC=(docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml)
 SERVICES=(postgres migrate keycloak api web caddy)       # not openbao/ollama/observability: see docs/DEPLOYMENT_AWS.md
 "${DC[@]}" pull api web migrate
+
+# Survive a stop/start of the instance: a swap file for memory headroom and a systemd unit that brings the stack up in order at
+# every boot from the images already on the disk (--pull never: the ECR login has expired by then and must not be needed).
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile     && echo '/swapfile none swap sw 0 0' >> /etc/fstab && echo "== 2 GB swap file created"
+fi
+cat > /opt/sentrail/start.sh <<'START'
+#!/bin/bash
+# Run by sentrail.service at boot. Data (Postgres, API files, certificates) is in Docker volumes on the 30 GB root disk.
+set -euo pipefail
+cd /opt/sentrail
+exec docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml   up -d --no-build --pull never --remove-orphans postgres migrate keycloak api web caddy
+START
+chmod 750 /opt/sentrail/start.sh
+cat > /etc/systemd/system/sentrail.service <<'UNIT'
+[Unit]
+Description=Sentrail stack (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/sentrail/start.sh
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload && systemctl enable sentrail.service >/dev/null 2>&1
 
 echo "== starting (only services whose image changed are recreated; migrations run before the API)"
 "${DC[@]}" up -d --no-build --remove-orphans "${SERVICES[@]}"
@@ -67,7 +103,7 @@ rollback_on_failure() {
   local prev_web; prev_web=$(resolve web previous 2>/dev/null || true)
   if [ -n "$prev_api" ] || [ -n "$prev_web" ]; then
     echo "== AUTO-RECOVERY: Reverting to last known working version (api: ${prev_api:-$API_NEW}, web: ${prev_web:-$WEB_NEW}) ==" >&2
-    printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\n' "$ECR_REGISTRY" "${prev_api:-$API_NEW}" "${prev_web:-$WEB_NEW}" > .deploy.env
+    printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\n' "$ECR_REGISTRY" "${prev_api:-$API_NEW}" "${prev_web:-$WEB_NEW}" "$FALLBACK_HOST" > .deploy.env
     "${DC[@]}" pull api web 2>/dev/null || true
     "${DC[@]}" up -d --no-build --remove-orphans "${SERVICES[@]}"
     echo "Auto-recovery deployed previous healthy containers." >&2

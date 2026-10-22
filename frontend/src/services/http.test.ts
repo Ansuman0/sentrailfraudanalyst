@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, errorMessage, hasAccessToken, onSignedOut, refreshSession, request, setAccessToken } from "./http";
+import { ApiError, errorMessage, hasAccessToken, onSignedOut, refreshSession, request, resolveApiBase, setAccessToken } from "./http";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -106,5 +106,20 @@ describe("errorMessage", () => {
     expect(errorMessage(["Use at least 14 characters", "Don't include your name"], "x"))
       .toBe("Use at least 14 characters. Don't include your name");
     expect(errorMessage(undefined, "fallback")).toBe("fallback");
+  });
+});
+
+describe("resolveApiBase", () => {
+  const api = "https://api.sentrail.qatech.world";
+  it("keeps the configured API on the app's own domain", () => {
+    expect(resolveApiBase(api, "sentrail.qatech.world", "https://sentrail.qatech.world")).toBe(api);
+  });
+  it("uses same-origin /api on the AWS public hostname (domain not resolving yet)", () => {
+    const host = "ec2-44-196-164-178.compute-1.amazonaws.com";
+    expect(resolveApiBase(api + "/", host, `https://${host}`)).toBe(`https://${host}/api`);
+  });
+  it("leaves local development alone", () => {
+    expect(resolveApiBase("http://localhost:8000", "localhost", "http://localhost:5173")).toBe("http://localhost:8000");
+    expect(resolveApiBase(api, "localhost", "http://localhost:5173")).toBe(api);
   });
 });

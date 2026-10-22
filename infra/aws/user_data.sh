@@ -19,3 +19,4 @@ unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install
 
 systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true   # preinstalled on Ubuntu AMIs
 install -d -m 750 /opt/sentrail
+# Auto-start after stop/start is installed by scripts/deploy.sh (sentrail.service); it needs only Docker enabled at boot, done above.

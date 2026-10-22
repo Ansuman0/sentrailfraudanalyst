@@ -5,6 +5,8 @@ a developer machine. Backend: 160 checks, frontend: 23 tests, all passing. See [
 
 ## Changed
 
+- **Works before DNS is ready**: the app now also opens on the server's AWS public hostname (`https://ec2-…compute-1.amazonaws.com`, printed by the deploy log); the browser app talks to the API on the same address. Single sign-on still needs the real domain.
+
 - **Project layout**: the API now lives in `backend/` and the web app in `frontend/`, each with its own dependencies, Dockerfile and tests;
   Postgres init, the Keycloak realm and observability config moved to `infra/`. Run Python commands from `backend/` (the virtualenv is
   `backend/.venv`); `.env` and `docker-compose.yml` stay at the root. See [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md).
