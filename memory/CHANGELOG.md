@@ -2,6 +2,10 @@
 
 Engineering log of meaningful changes, newest first. User-facing release notes: [../CHANGES.md](../CHANGES.md).
 
+## 2026-10-22 — GitHub Actions cache: one backend + one frontend entry
+
+Found 38 entries / 2.3 GB (Docker `type=gha` stores each layer as its own never-replaced entry; `setup-python` pip cache 859 MB; npm cache). `deploy.yml` build jobs (AWS and GCP) now use `type=local` Docker cache in `/tmp/buildx-{backend,frontend}`, restored with `actions/cache/restore` (prefix key), saved once per push as `buildx-<service>-<sha>`, then older caches are deleted with `gh cache delete` (build jobs need `actions: write`). The first run also deletes every legacy cache. AWS and GCP share the same two caches. Removed `cache: npm` / `cache: pip` from the test jobs (tests install dependencies from scratch: slower, but no extra cache entries). Not yet run on GitHub.
+
 ## 2026-10-22 — AWS public-hostname fallback; domain outage diagnosed
 
 **Login "Too many attempts" on AWS.** Root cause: behind Caddy the API saw Caddy's container IP for every client, so the 5/min login limiter and the per-(email, IP) lockout were one shared bucket and audit IPs were wrong. Fix: `FORWARDED_ALLOW_IPS=*` on `api` in `docker-compose.prod.yml` (uvicorn then trusts Caddy's X-Forwarded-For; Caddy overwrites client-sent values). Master login seeded on the server (credentials in git-ignored `.prod-credentials.txt`). Server-side seed-demo / remove-demo / reset-lockout were given to the user as manual SSM steps (not run by the assistant).

@@ -157,7 +157,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm, cache-dependency-path: frontend/package-lock.json }
+        with: { node-version: 20 }
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
@@ -171,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+        with: { python-version: "3.11" }
       - run: python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Generate throwaway secrets for CI
         run: |
@@ -228,7 +228,7 @@ jobs:
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
           && needs.test-backend.result != 'failure' }}
     runs-on: ubuntu-latest
-    permissions: { contents: read, id-token: write }
+    permissions: { contents: read, id-token: write, actions: write }
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -246,6 +246,12 @@ jobs:
           username: qaansuman
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
       - uses: docker/setup-buildx-action@v3
+      - name: Restore backend build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/buildx-backend
+          key: buildx-backend-${{ github.sha }}
+          restore-keys: buildx-backend-
       - name: Assemble backend image tags
         id: meta
         run: |
@@ -260,8 +266,30 @@ jobs:
           context: backend
           outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=aws-api
-          cache-to: type=gha,scope=aws-api,mode=max
+          cache-from: type=local,src=/tmp/buildx-backend
+          cache-to: type=local,dest=/tmp/buildx-backend-new,mode=max
+      - name: Keep only the newest backend build cache
+        if: success()
+        run: rm -rf /tmp/buildx-backend && mv /tmp/buildx-backend-new /tmp/buildx-backend
+      - name: Save backend build cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/buildx-backend
+          key: buildx-backend-${{ github.sha }}
+      - name: Delete older caches (only one backend and one frontend cache are kept)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: buildx-backend-${{ github.sha }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | "\(.id) \(.key)"' | while read -r id key; do
+            case "$key" in
+              "$KEEP") ;;
+              buildx-frontend-*) ;;   # the other service's cache is pruned by its own job
+              *) gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true ;;
+            esac
+          done
 
   build-aws-frontend:
     needs: [plan, test-frontend]
@@ -270,7 +298,7 @@ jobs:
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
           && needs.test-frontend.result != 'failure' }}
     runs-on: ubuntu-latest
-    permissions: { contents: read, id-token: write }
+    permissions: { contents: read, id-token: write, actions: write }
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -288,6 +316,12 @@ jobs:
           username: qaansuman
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
       - uses: docker/setup-buildx-action@v3
+      - name: Restore frontend build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/buildx-frontend
+          key: buildx-frontend-${{ github.sha }}
+          restore-keys: buildx-frontend-
       - name: Assemble frontend image tags
         id: meta
         run: |
@@ -303,8 +337,30 @@ jobs:
           build-args: VITE_API_BASE_URL=${{ vars.API_URL || 'https://api.sentrail.qatech.world' }}
           outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=aws-web
-          cache-to: type=gha,scope=aws-web,mode=max
+          cache-from: type=local,src=/tmp/buildx-frontend
+          cache-to: type=local,dest=/tmp/buildx-frontend-new,mode=max
+      - name: Keep only the newest frontend build cache
+        if: success()
+        run: rm -rf /tmp/buildx-frontend && mv /tmp/buildx-frontend-new /tmp/buildx-frontend
+      - name: Save frontend build cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/buildx-frontend
+          key: buildx-frontend-${{ github.sha }}
+      - name: Delete older caches (only one backend and one frontend cache are kept)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: buildx-frontend-${{ github.sha }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | "\(.id) \(.key)"' | while read -r id key; do
+            case "$key" in
+              "$KEEP") ;;
+              buildx-backend-*) ;;   # the other service's cache is pruned by its own job
+              *) gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true ;;
+            esac
+          done
 
   deploy-aws:
     needs: [plan, build-aws-backend, build-aws-frontend]
@@ -422,7 +478,7 @@ jobs:
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.backend == 'true'
           && needs.test-backend.result != 'failure' }}
     runs-on: ubuntu-latest
-    permissions: { contents: read, id-token: write }
+    permissions: { contents: read, id-token: write, actions: write }
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -437,6 +493,12 @@ jobs:
           username: qaansuman
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
       - uses: docker/setup-buildx-action@v3
+      - name: Restore backend build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/buildx-backend
+          key: buildx-backend-${{ github.sha }}
+          restore-keys: buildx-backend-
       - name: Assemble GCP backend image tags
         id: meta
         run: |
@@ -448,8 +510,30 @@ jobs:
           context: backend
           outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=gcp-api
-          cache-to: type=gha,scope=gcp-api,mode=max
+          cache-from: type=local,src=/tmp/buildx-backend
+          cache-to: type=local,dest=/tmp/buildx-backend-new,mode=max
+      - name: Keep only the newest backend build cache
+        if: success()
+        run: rm -rf /tmp/buildx-backend && mv /tmp/buildx-backend-new /tmp/buildx-backend
+      - name: Save backend build cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/buildx-backend
+          key: buildx-backend-${{ github.sha }}
+      - name: Delete older caches (only one backend and one frontend cache are kept)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: buildx-backend-${{ github.sha }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | "\(.id) \(.key)"' | while read -r id key; do
+            case "$key" in
+              "$KEEP") ;;
+              buildx-frontend-*) ;;   # the other service's cache is pruned by its own job
+              *) gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true ;;
+            esac
+          done
 
   build-gcp-frontend:
     needs: [plan, test-frontend]
@@ -458,7 +542,7 @@ jobs:
           && needs.plan.outputs.action == 'deploy' && needs.plan.outputs.frontend == 'true'
           && needs.test-frontend.result != 'failure' }}
     runs-on: ubuntu-latest
-    permissions: { contents: read, id-token: write }
+    permissions: { contents: read, id-token: write, actions: write }
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -473,6 +557,12 @@ jobs:
           username: qaansuman
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_PASSWORD }}
       - uses: docker/setup-buildx-action@v3
+      - name: Restore frontend build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/buildx-frontend
+          key: buildx-frontend-${{ github.sha }}
+          restore-keys: buildx-frontend-
       - name: Assemble GCP frontend image tags
         id: meta
         run: |
@@ -485,8 +575,30 @@ jobs:
           build-args: VITE_API_BASE_URL=${{ vars.API_URL || 'https://api.sentrail.qatech.world' }}
           outputs: type=image,push=true,compression=gzip,compression-level=9,force-compression=true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=gcp-web
-          cache-to: type=gha,scope=gcp-web,mode=max
+          cache-from: type=local,src=/tmp/buildx-frontend
+          cache-to: type=local,dest=/tmp/buildx-frontend-new,mode=max
+      - name: Keep only the newest frontend build cache
+        if: success()
+        run: rm -rf /tmp/buildx-frontend && mv /tmp/buildx-frontend-new /tmp/buildx-frontend
+      - name: Save frontend build cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/buildx-frontend
+          key: buildx-frontend-${{ github.sha }}
+      - name: Delete older caches (only one backend and one frontend cache are kept)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: buildx-frontend-${{ github.sha }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | "\(.id) \(.key)"' | while read -r id key; do
+            case "$key" in
+              "$KEEP") ;;
+              buildx-backend-*) ;;   # the other service's cache is pruned by its own job
+              *) gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true ;;
+            esac
+          done
 
   deploy-gcp:
     needs: [plan, build-gcp-backend, build-gcp-frontend]
