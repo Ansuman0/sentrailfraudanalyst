@@ -16,11 +16,13 @@
 	reverse_proxy keycloak:8080
 }
 
-# Fallback: the same app on the AWS public hostname (ec2-<ip>.compute-1.amazonaws.com, set by scripts/deploy.sh), so the site
-# opens before the domain's DNS has propagated. The web app sees it is not on the domain and calls the API on this origin
-# under /api. The refresh cookie is scoped to /auth, so its path is moved to /api/auth. Password sign-in works here; SSO
-# redirects (Keycloak) still use the domain names.
-{$FALLBACK_HOST:localhost} {
+# Fallback: the same app on addresses that work before the domain's DNS has propagated (set by scripts/deploy.sh from the instance
+# metadata). The web app sees it is not on the domain and calls the API on this origin under /api. The refresh cookie is scoped to
+# /auth, so its path is moved to /api/auth. Password sign-in works here; SSO redirects (Keycloak) still use the domain names.
+#   SSLIP_HOST     <ip-with-dashes>.sslip.io (resolves to this host): gets a trusted Let's Encrypt certificate.
+#   FALLBACK_HOST  ec2-<ip>.compute-1.amazonaws.com: Let's Encrypt refuses amazonaws.com names, so a self-signed certificate
+#                  (the browser warns once; choose "continue").
+(fallback) {
 	handle_path /api/* {
 		reverse_proxy api:8000 {
 			header_down Set-Cookie "(?i)path=/auth" "Path=/api/auth"
@@ -31,7 +33,16 @@
 	}
 }
 
-# Plain-HTTP requests for any other name (the bare IP address, an unknown host) go to the fallback hostname over HTTPS.
+{$SSLIP_HOST:sslip-unset.invalid} {
+	import fallback
+}
+
+{$FALLBACK_HOST:localhost} {
+	tls internal
+	import fallback
+}
+
+# Plain-HTTP requests for any other name (the bare IP address, an unknown host) go to the trusted fallback name over HTTPS.
 http:// {
-	redir https://{$FALLBACK_HOST:localhost}{uri} 302
+	redir https://{$SSLIP_HOST:localhost}{uri} 302
 }

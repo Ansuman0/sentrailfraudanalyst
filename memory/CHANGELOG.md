@@ -4,6 +4,8 @@ Engineering log of meaningful changes, newest first. User-facing release notes: 
 
 ## 2026-10-22 — AWS public-hostname fallback; domain outage diagnosed
 
+**First deploy run (2026-10-22), two findings.** (1) `deploy.sh` bug: the workflow passes `API_TAG=""`/`WEB_TAG=""`, and Compose lets shell variables beat `--env-file`, so single-service deploys failed with "API_TAG is missing"; fixed by exporting the resolved tags (commit cbb100f). Second run: all jobs green incl. smoke test; boot service enabled, 2 GB swap active, root disk 47% used. (2) Let's Encrypt rejects `ec2-*.amazonaws.com` (rejectedIdentifier), so that fallback had no certificate; now `tls internal` there plus a trusted `<ip>.sslip.io` fallback (`SSLIP_HOST`).
+
 **Stop/start survival (decided with the user: keep ONE 30 GB root disk, no second EBS volume, because free tier covers 30 GB EBS in total).** `scripts/deploy.sh` now also creates a 2 GB swap file and installs `/opt/sentrail/start.sh` + `sentrail.service` (enabled at boot, `up -d --pull never`, so no ECR login is needed). Takes effect on the next deploy run; not yet run on the host. Docker Desktop was quit locally.
 
 **Diagnosis.** The AWS stack (EC2 `i-00dbe6361a3a8a0d7`, EIP 44.196.164.178, Namecheap A records for the 3 names, Let's Encrypt certs) was fine except the instance had been **stopped**; started it, web/API/Keycloak then answered 200 with valid certs. On the developer PC the Windows hosts file still mapped the 3 names to 127.0.0.1 (local Docker leftover), so the browser never reached AWS.

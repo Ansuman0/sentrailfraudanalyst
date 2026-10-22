@@ -48,11 +48,13 @@ mv .env.new .env
 IMDS_TOKEN=$(curl -fsS -m 3 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)
 FALLBACK_HOST=$(curl -fsS -m 3 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-hostname 2>/dev/null || true)
 FALLBACK_HOST=${FALLBACK_HOST:-localhost}
-printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\n' "$ECR_REGISTRY" "$API_NEW" "$WEB_NEW" "$FALLBACK_HOST" > .deploy.env
-echo "== fallback URL: https://$FALLBACK_HOST"
+PUBLIC_IP=$(curl -fsS -m 3 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+SSLIP_HOST=${PUBLIC_IP:+${PUBLIC_IP//./-}.sslip.io}; SSLIP_HOST=${SSLIP_HOST:-sslip-unset.invalid}
+printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\nSSLIP_HOST=%s\n' "$ECR_REGISTRY" "$API_NEW" "$WEB_NEW" "$FALLBACK_HOST" "$SSLIP_HOST" > .deploy.env
+echo "== fallback URLs: https://$SSLIP_HOST (trusted certificate) and https://$FALLBACK_HOST (self-signed)"
 # Compose gives shell variables priority over --env-file, and the workflow passes API_TAG="" / WEB_TAG="" for "keep the running
 # version". Export the resolved values so an empty one can't hide them.
-export API_TAG="$API_NEW" WEB_TAG="$WEB_NEW" FALLBACK_HOST
+export API_TAG="$API_NEW" WEB_TAG="$WEB_NEW" FALLBACK_HOST SSLIP_HOST
 
 if [[ "$ECR_REGISTRY" == *"amazonaws.com"* ]]; then
   echo "== logging in to AWS ECR, pulling images"
@@ -106,7 +108,7 @@ rollback_on_failure() {
   local prev_web; prev_web=$(resolve web previous 2>/dev/null || true)
   if [ -n "$prev_api" ] || [ -n "$prev_web" ]; then
     echo "== AUTO-RECOVERY: Reverting to last known working version (api: ${prev_api:-$API_NEW}, web: ${prev_web:-$WEB_NEW}) ==" >&2
-    printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\n' "$ECR_REGISTRY" "${prev_api:-$API_NEW}" "${prev_web:-$WEB_NEW}" "$FALLBACK_HOST" > .deploy.env
+    printf 'ECR_REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\nFALLBACK_HOST=%s\nSSLIP_HOST=%s\n' "$ECR_REGISTRY" "${prev_api:-$API_NEW}" "${prev_web:-$WEB_NEW}" "$FALLBACK_HOST" "$SSLIP_HOST" > .deploy.env
     export API_TAG="${prev_api:-$API_NEW}" WEB_TAG="${prev_web:-$WEB_NEW}"
     "${DC[@]}" pull api web 2>/dev/null || true
     "${DC[@]}" up -d --no-build --remove-orphans "${SERVICES[@]}"

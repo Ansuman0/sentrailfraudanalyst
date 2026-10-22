@@ -108,15 +108,15 @@ Public names, all pointing at the **Elastic IP** (`terraform output elastic_ip`)
 4. Check: `https://sentrail.qatech.world` loads, `https://api.sentrail.qatech.world/readyz` is OK, sign-in keeps its cookie after a reload,
    and `https://auth.sentrail.qatech.world/realms/sentrail/.well-known/openid-configuration` answers.
 
-### Opening the app before the domain works (fallback URL)
-`scripts/deploy.sh` reads the host's AWS public hostname and Caddy serves the whole app there too (Let's Encrypt certificate, same as the domain):
-`https://ec2-<elastic-ip-with-dashes>.compute-1.amazonaws.com` (the deploy log prints it as `fallback URL`; `terraform output elastic_ip` gives the IP).
+### Opening the app before the domain works (fallback URLs)
+`scripts/deploy.sh` reads the host's public IP and hostname and Caddy serves the whole app on two extra names (the deploy log prints both):
+- `https://<ip-with-dashes>.sslip.io` (for example `https://44-196-164-178.sslip.io`): resolves to the Elastic IP and gets a normal Let's Encrypt certificate. Use this one.
+- `https://ec2-<ip-with-dashes>.compute-1.amazonaws.com`: Let's Encrypt **refuses** amazonaws.com names (found on the first deploy), so Caddy uses a self-signed certificate; the browser warns once, choose "continue".
+
 The web app notices it is not on `qatech.world` and calls the API on the same address under `/api`. Password sign-in works; SSO via Keycloak
-still redirects to `auth.sentrail.qatech.world`. Visiting the bare IP over http redirects to the hostname. If the domain does not open on your PC but the
+still redirects to `auth.sentrail.qatech.world`. Visiting the bare IP over http redirects to the sslip.io name. If the domain does not open on your PC but a
 fallback does, check DNS (`nslookup sentrail.qatech.world 8.8.8.8`) and the Windows hosts file (`C:\Windows\System32\drivers\etc\hosts`) for leftover
 `127.0.0.1 sentrail.qatech.world …` lines. The instance must be running (stopped instances serve nothing; the Elastic IP is kept).
-
-## Operating it
 
 ### Stopping and starting the instance (saving credits)
 Stop the instance in the EC2 console when you don't need it; start it again later. Data (Postgres, API files, certificates) is on the 30 GB

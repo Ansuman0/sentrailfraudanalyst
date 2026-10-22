@@ -10,6 +10,7 @@ services:
       AUTH_HOST: ${AUTH_HOST:-auth.sentrail.qatech.world}
       ACME_EMAIL: ${ACME_EMAIL:-}
       FALLBACK_HOST: ${FALLBACK_HOST:-localhost}
+      SSLIP_HOST: ${SSLIP_HOST:-sslip-unset.invalid}
     volumes:
       - ${CADDYFILE:-./infra/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
