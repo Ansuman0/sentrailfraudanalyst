@@ -58,3 +58,4 @@ infra/aws/.terraform/
 *.tfstate.*
 infra/aws/terraform.tfvars
 aws_credentials.env
+.prod-credentials.txt

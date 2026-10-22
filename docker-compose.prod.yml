@@ -28,7 +28,12 @@ services:
 
   postgres: { restart: unless-stopped }
   web: { restart: unless-stopped }
-  api: { restart: unless-stopped }
+  api:
+    restart: unless-stopped
+    environment:
+      # Behind Caddy every request comes from Caddy's container IP. Trust its X-Forwarded-For (Caddy overwrites whatever the client sends)
+      # so the login lockout, rate limits and audit IPs are per real client, not one shared bucket. The API is reachable only through Caddy.
+      FORWARDED_ALLOW_IPS: "*"
 
 volumes:
   caddy-data:
