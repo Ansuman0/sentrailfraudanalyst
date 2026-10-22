@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { Logo } from "../components/Logo";
 import { useAuth } from "../hooks/useAuth";
-import { ApiError, apiUrl } from "../services/http";
+import { ApiError } from "../services/http";
 import { auth } from "../services/sentrail";
 import { safeReturnPath } from "../utils/format";
 
@@ -78,26 +78,6 @@ export function SignIn() {
     }
   }
 
-  async function continueWithSso() {
-    setError(null);
-    if (!email.trim()) {
-      setError("Enter your work email first.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await auth.discover(email.trim());
-      // The API answers with its own relative OIDC path; never follow anything else.
-      if (!r.next.startsWith("/auth/oidc/login")) throw new Error("Unexpected sign-in response");
-      const url = new URL(apiUrl(r.next));
-      url.searchParams.set("return_to", returnTo);
-      window.location.assign(url.toString());
-    } catch (err) {
-      fail(err);
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="login">
       <div className="card">
@@ -121,11 +101,6 @@ export function SignIn() {
             <button className="btn primary full" disabled={busy || !email || !password}>
               {busy ? "Signing in…" : "Continue"}
             </button>
-            <div className="lor">or</div>
-            <button type="button" className="btn full" disabled={busy} onClick={() => void continueWithSso()}>
-              Continue with single sign-on
-            </button>
-            <p className="via">Organization users with company sign-in use single sign-on.</p>
           </form>
         ) : (
           <form onSubmit={submitCode} noValidate>

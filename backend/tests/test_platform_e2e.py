@@ -27,6 +27,8 @@ def enroll(link, email, name, pw):
     tok = link.split("#", 1)[1]
     r = c.post("/invitations/accept", json={"token": tok, "full_name": name, "password": pw}); assert r.status_code == 200, r.text
     H = {"Authorization": "Bearer " + c.post("/auth/login", json={"email": email, "password": pw}).json()["access_token"]}
+    if email.endswith("@sentrail.io"):      # platform staff (organization users are optional unless their org insists)
+        ok(c.get("/me", headers=H).json()["mfa_setup"] == "required", f"platform staff {email} must set up two-factor (owner may skip)")
     sec = c.post("/me/mfa/setup", headers=H).json()["secret"]
     assert c.post("/me/mfa/confirm", headers=H, json={"code": code(sec)}).status_code == 200
     return sec

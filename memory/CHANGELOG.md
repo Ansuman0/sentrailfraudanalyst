@@ -2,6 +2,10 @@
 
 Engineering log of meaningful changes, newest first. User-facing release notes: [../CHANGES.md](../CHANGES.md).
 
+## 2026-10-23 — Single email+password sign-in; two-factor for demo users
+
+User decision: no SSO button, one sign-in system, two-factor on for everyone except the owner (master) login. Sign-in page: removed "Continue with single sign-on". Backend: platform staff other than "Platform owner" now get `mfa_setup=required` (rbac.current_user); `seed --demo` sets `security_settings.mfa_required=true` for both demo orgs. Tests: backend 7 suites pass (platform_e2e +1 check), frontend 60. **Server still needs (blocked for the assistant, left to the user):** `AUTH_MODE=local` in the `sentrail/prod/env` secret + redeploy, then delete the old Keycloak-created demo users (orgs M23456789 / M24567810, platform staff roles …0001/0003/0004) and re-run `seed --demo` so they get local passwords. Until then demo users cannot sign in (Keycloak users are refused by the password form).
+
 ## 2026-10-22 — GitHub Actions cache: one backend + one frontend entry
 
 Found 38 entries / 2.3 GB (Docker `type=gha` stores each layer as its own never-replaced entry; `setup-python` pip cache 859 MB; npm cache). `deploy.yml` build jobs (AWS and GCP) now use `type=local` Docker cache in `/tmp/buildx-{backend,frontend}`, restored with `actions/cache/restore` (prefix key), saved once per push as `buildx-<service>-<sha>`, then older caches are deleted with `gh cache delete` (build jobs need `actions: write`). The first run also deletes every legacy cache. AWS and GCP share the same two caches. Removed `cache: npm` / `cache: pip` from the test jobs (tests install dependencies from scratch: slower, but no extra cache entries). Not yet run on GitHub.

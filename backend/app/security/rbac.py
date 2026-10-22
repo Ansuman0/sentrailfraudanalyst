@@ -90,6 +90,8 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             allow, org_requires = (r[0], r[1]) if r else ([], False)
     if allow and (ip is None or not any(ipaddress.ip_address(ip) in ipaddress.ip_network(str(n)) for n in allow)):
         raise HTTPException(403, "Access isn't allowed from this network")
+    if not c["org"] and row[2] != "Platform owner":
+        org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
     perms = set(row[3])
     mfa_used = "otp" in c.get("amr", [])
     if row[4] and not mfa_used:

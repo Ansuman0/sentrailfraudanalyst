@@ -106,6 +106,7 @@ def seed_demo():
             if t["sso_domain"]:   # demo only: real tenants prove the domain with a DNS TXT record (/admin/sso/verify)
                 cur.execute("UPDATE organizations SET sso_domain=%s, sso_idp_alias=%s, sso_enforced=true WHERE id=%s",
                             (t["sso_domain"], t["idp_alias"], org))
+            cur.execute("UPDATE security_settings SET mfa_required=true WHERE org_id=%s", (org,))   # demo users set up two-factor at first sign-in
             audit.write(cur, org, None, "operator", "demo_tenant_seeded", t["name"], {})
         print(f"\n{t['name']} ({t['env']})  org_id={org}")
         for email, name, role in t["users"]:
@@ -117,7 +118,7 @@ def seed_demo():
                                    VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                                 (aid, org, cid, score, band, json.dumps([{"source": "rule", "text": reason}]), ch))
     if AUTH_MODE == "keycloak":
-        print("\nDemo users sign in through Keycloak with the demo password and set up two-factor on first sign-in.")
+        print("\nDemo users sign in with the demo password and set up two-factor at first sign-in.")
 
 
 if __name__ == "__main__":
