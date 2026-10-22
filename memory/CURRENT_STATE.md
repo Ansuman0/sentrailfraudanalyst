@@ -82,6 +82,9 @@ Written, never run (K-13): `infra/gcp`, `docker-compose.gcp.yml`, `scripts/deplo
 
 
 
+## Demo data on the AWS server (2026-10-23)
+Seeded by the user's request with `seed --demo` run in the api container (ENV overridden for that one command; the server stays ENV=production). 2 demo orgs (Northwind Remit, Maple Ridge), 9 demo users (@sentrail.qatech.world), 3 alerts. AUTH_MODE=keycloak: demo users sign in via Keycloak (needs the domain, not the fallback URL) and set up TOTP on first sign-in. Password in git-ignored `.prod-credentials.txt`. To remove: delete both orgs by registration M23456789 / M24567810 + demo platform staff (roles ...0001/0003/0004), and delete the demo users in Keycloak; audit rows stay (append-only).
+
 ## AWS live state and fallback URL (2026-10-22)
 Terraform applied (state in `infra/aws`), images in ECR, DNS at Namecheap resolves to the EIP. Instance had been stopped; restarted. Deployed 2026-10-22 (commit 2f444cc, all jobs green): domain, API, Keycloak, `https://44-196-164-178.sslip.io` (trusted) and the ec2 hostname (self-signed; Let's Encrypt refuses amazonaws.com) all answer 200. Boot service + swap installed; a real stop/start test is still to do. Browser sign-in not yet checked. Password sign-in works on the fallback; SSO (Keycloak) still uses the domain names. Developer PC hosts file must not map the domain to 127.0.0.1 when testing AWS.
 ## Consolidated Single Multi-Cloud Pipeline (2026-10-20)
