@@ -7,7 +7,7 @@ import type { AdminUser } from "../types/api";
 import { fmtDateTime } from "../utils/format";
 
 export function Users() {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const qc = useQueryClient();
   const users = useQuery({ queryKey: ["admin-users"], queryFn: admin.users });
   const roles = useQuery({ queryKey: ["admin-roles"], queryFn: admin.roles, retry: false });
@@ -60,7 +60,7 @@ export function Users() {
         <td>{u.mfa ? "On" : "Off"}</td>
         <td>{fmtDateTime(u.last_login)}</td>
         <td>
-          {!self && <button className="btn" onClick={() => open("reveal", u)}>Reveal email</button>}{" "}
+          {!self && can("users.pii.reveal") && <button className="btn" onClick={() => open("reveal", u)}>Reveal email</button>}{" "}
           {!self && u.mfa && <button className="btn" onClick={() => open("reset", u)}>Reset two-factor</button>}{" "}
           {!self && u.status === "active" && (
             <button className="btn danger" disabled={update.isPending}

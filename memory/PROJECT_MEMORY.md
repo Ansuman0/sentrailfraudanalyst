@@ -49,6 +49,8 @@ frontend/ (React 18 + TS, Vite)  ──Bearer token──▶  backend/ (FastAPI,
 
 ## Authentication and sessions
 
+- **Access model v2 (2026-10-23, branch `access-v2/phase-1`, see DECISIONS.md):** memberships (`tenant_memberships`, `platform_staff`) are the new authority for who may act where; while `ACCESS_MODEL_V2` is off the old `users.org_id/role_id` stay authoritative and a trigger copies real role/status changes into the new tables. `pg.tx(org, actor=person)` makes row-level security require an active membership (or live owner access session) in addition to the tenant; no actor = machine/system context. A session (refresh-token family) is bound to one active tenant and a last-second-factor time (step-up, 10 min); every request checks the family is still live, the tenant is active, and routes declare their permission (`app/access/routes.py`). Permissions come from one catalogue (`app/access/catalogue.py`); docs/permissions.md and docs/route-permissions.md are generated.
+
 - `AUTH_MODE=keycloak` (recommended): org users sign in via OIDC (code + PKCE, backend-for-frontend; the browser
   never sees OIDC tokens). Platform staff keep a break-glass password + TOTP login. `AUTH_MODE=local`: everyone
   uses the API's password sign-in (used for local dev and most tests), plus TOTP once two-factor is on.

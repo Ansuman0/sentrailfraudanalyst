@@ -41,6 +41,11 @@ class Principal:
     selecting: bool = False         # scope == "select": only /me, /me/tenants and /session/* are available
     last_mfa_at: int | None = None  # epoch seconds of the last second-factor check in this session (step-up)
 
+    @property
+    def actor(self):
+        """The person for the database's membership check; an API key acts for its tenant only (no person)."""
+        return self.user_id if self.kind == "user" else None
+
     def mfa_fresh(self) -> bool:
         """A second factor was proved within the step-up window."""
         return self.last_mfa_at is not None and time.time() - self.last_mfa_at <= STEP_UP_WINDOW_SECONDS
@@ -125,13 +130,7 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             raise HTTPException(401, "Your session has ended. Sign in again")
         return Principal(c["sub"], None, "", set(), set(), ip, session_id=c.get("sid"), mfa="otp" in c.get("amr", []),
                          scope="select", selecting=True, last_mfa_at=c.get("lmfa"))
-    with pg.tx(c["org"], platform=c["org"] is None) as cur:
-        if c["org"]:
-            # Request check order step 2: a suspended, pending or deleted tenant refuses everything.
-            cur.execute("SELECT status FROM organizations WHERE id=%s", (c["org"],))
-            st = cur.fetchone()
-            if not st or st[0] not in ("active", "trial"):
-                raise HTTPException(403, "This organization isn't active")
+    with pg.tx(c["org"], platform=c["org"] is None, actor=c["sub"]) as cur:
         cur.execute("SELECT status, session_version, role_id, mfa_enabled, keycloak FROM session_user_lookup(%s)", (c["sub"],))
         u = cur.fetchone()
         if not u or u[0] != "active" or u[1] != c["sv"]:
@@ -151,6 +150,16 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             if not m or m[1] != "active":
                 raise HTTPException(401, "Your session has ended. Sign in again")
             role_id = m[0]
+
+        if c["org"]:
+            # Request check order step 2: a suspended, pending or deleted tenant refuses everything. (A tenant row that is simply not
+            # visible means the person no longer has an active membership there: the session is over, not "forbidden".)
+            cur.execute("SELECT status FROM organizations WHERE id=%s", (c["org"],))
+            st = cur.fetchone()
+            if not st:
+                raise HTTPException(401, "Your session has ended. Sign in again")
+            if st[0] not in ("active", "trial"):
+                raise HTTPException(403, "This organization isn't active")
 
         def load_role():
             cur.execute("""SELECT r.name, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}')
@@ -206,6 +215,7 @@ def require(*perms: str, feature: str | None = None):
             # Phase 6 makes two-factor mandatory for Tenant admins and passkeys for owners.)
             raise StepUpRequired(sorted(stepped))
         return p
+    dep.sentrail_kind, dep.sentrail_perms = "require", tuple(perms)      # read by app/access/routes.py
     return dep
 
 
@@ -241,4 +251,11 @@ def require_any(*perms: str):
         if not any(p.can(x) for x in perms):
             raise HTTPException(403, "Your role doesn't allow this")
         return p
+    dep.sentrail_kind, dep.sentrail_perms = "any", tuple(perms)
     return dep
+
+
+# How app/access/routes.py recognises what protects a route.
+api_key.sentrail_kind, api_key.sentrail_perms = "api_key", ("screen",)
+signed_in_user.sentrail_kind, signed_in_user.sentrail_perms = "session", ()
+current_user.sentrail_kind, current_user.sentrail_perms = "session", ()

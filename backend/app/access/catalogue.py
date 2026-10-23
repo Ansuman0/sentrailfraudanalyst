@@ -154,7 +154,7 @@ def sync(conn) -> dict:
         # Locked Tenant admin roles: every tenant permission.
         rows = conn.execute("""INSERT INTO role_permissions
                                SELECT r.id, p.key FROM roles r CROSS JOIN permissions p
-                               WHERE r.is_locked AND p.scope='tenant' ON CONFLICT DO NOTHING RETURNING role_id""").fetchall()
+                               WHERE r.is_locked AND r.scope='tenant' AND p.scope='tenant' ON CONFLICT DO NOTHING RETURNING role_id""").fetchall()
         changed["tenant_admin_added"] = len(rows)
         if rows:
             conn.execute("UPDATE users SET session_version = session_version + 1 WHERE role_id = ANY(%s)", (list({r[0] for r in rows}),))

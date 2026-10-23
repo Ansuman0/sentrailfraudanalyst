@@ -129,3 +129,33 @@ two-factor turned on or reset, role changed (and password changed, when a passwo
 otherwise logged with a masked address. They never carry secrets.
 
 **Audit actions:** `auth.signin`, `auth.signin_failed`, `auth.locked`, `auth.tenant_switch`, `auth.step_up`, `auth.step_up_failed`, `auth.signout`.
+
+## Authorization and isolation (access model v2, phase 3)
+
+**Every route declares what protects it.** `app/access/routes.py` reads each route's dependency tree and classifies it as permission,
+API key, self-service (signed in, own account only: `/me*`, `/session/*`) or public (an explicit allowlist). A route that is none of these stops the
+API from starting (`check_routes` at the end of `main.py`) and fails the unit test. The full map is generated into
+[route-permissions.md](route-permissions.md) (`python -m scripts.gen_route_doc`; a test fails when it is stale).
+
+**Row-level security knows who is acting** (migration 011). `pg.tx(org, actor=person)` sets `app.actor`; a policy lets a row through when its
+tenant is the session's tenant **and** the actor has an active membership there (or a live owner access session). With no actor (API key,
+sign-in lookups, scripts) the tenant scoping alone applies, as before. Platform mode additionally needs the actor to be active platform staff, and
+never reaches case data. A person always reaches their own `users` row. A suspended or removed membership is therefore cut off in the database
+itself, not only by the API.
+
+**Restricted (need-to-know) cases.** `alerts.restricted`; a restricted case, its screening, its STR and its customer in searches are visible only to
+holders of `cases.restricted.view` or people named on it (`case_access_grants`, `GET/POST/DELETE /cases/{id}/access`). Marking a case needs both
+`cases.decide` and `cases.restricted.view` (`PUT /cases/{id}/restricted`, reason required). Everyone else gets 404, the queue and search skip it, and
+the database enforces it (an analyst cannot read the STR directly either).
+
+**Read auditing.** `case_viewed` (restricted cases: every view; ordinary cases: once per person per hour), `str_viewed` when an STR is read, plus the
+existing `case_exported`. Restricting, un-restricting and naming people are audited with their reasons.
+
+**Permissions per route** follow the catalogue ([permissions.md](permissions.md)): security settings and company sign-in need `security.manage`,
+API keys `apikeys.manage`, revealing an email `users.pii.reveal`, tenant administration `platform.tenants.manage`. Old names still work as aliases
+(logged) until the cut-over. The Tenant admin and Platform owner roles are locked in the database.
+
+**Tests.** `test_isolation_e2e` calls every route that needs a sign-in as a Tenant admin of tenant A with tenant B's IDs (and as platform staff),
+then proves B's data was neither returned, changed nor logged (`ISOLATION_NEGATIVE_CONTROL=1` switches row-level security off to prove the suite can
+fail). `test_authorization_e2e` covers separation of duties, row-level security by actor, restricted cases, read auditing and the check order.
+Background jobs register in `app/access/jobs.py` and join the isolation run (there are none yet).

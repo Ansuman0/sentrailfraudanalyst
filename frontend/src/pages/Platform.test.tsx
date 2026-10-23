@@ -75,7 +75,7 @@ describe("Plans", () => {
   });
 
   it("is read-only for staff who can't manage plans", async () => {
-    stubApi(platformMe(["orgs.manage"]), { "GET /platform/plans": () => json(200, PLANS) });
+    stubApi(platformMe(["platform.tenants.manage"]), { "GET /platform/plans": () => json(200, PLANS) });
     renderAt("/plans");
     const card = await screen.findByRole("region", { name: "Plan Starter" });
     expect(within(card).getByRole("checkbox", { name: "Alert queue" })).toBeDisabled();
@@ -98,7 +98,7 @@ describe("Plans", () => {
 
 describe("Organizations: plan", () => {
   it("moves an organization to another plan only after confirming", async () => {
-    const calls = stubApi(platformMe(["orgs.manage"]), {
+    const calls = stubApi(platformMe(["platform.tenants.manage"]), {
       "GET /platform/orgs": () => json(200, [ORG]),
       "PUT /platform/orgs/o1/plan": () => json(200, { ok: true }),
     });

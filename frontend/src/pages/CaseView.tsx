@@ -25,7 +25,7 @@ export function CaseView() {
           <h1>Alert <span className="mono">{c.alert.id}</span></h1>
           <div className="facts">
             <div><b className="mono">{c.alert.customer_id}</b>Customer</div>
-            <div><b><StatusBadge status={c.alert.status} /></b>Status</div>
+            <div><b><StatusBadge status={c.alert.status} />{c.alert.restricted && <span className="rolechip" title="Visible only to people with restricted-case access or named on this case"> Restricted</span>}</b>Status</div>
             <div><b>{fmtDateTime(c.alert.created_at)}</b>Raised</div>
             <div><b>{c.source === "transaction_history" ? "Transaction history" : c.screening ? "Real-time screening" : "Alert record only"}</b>Scored from</div>
           </div>

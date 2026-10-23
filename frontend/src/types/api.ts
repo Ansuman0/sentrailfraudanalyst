@@ -58,6 +58,8 @@ export interface Alert {
   created_at: string;
   assigned_to: string | null;
   screening_id: string | null;
+  /** Need-to-know case: visible only to people with cases.restricted.view or named on the case. */
+  restricted?: boolean;
 }
 
 export interface Screening {
@@ -214,6 +216,8 @@ export interface RoleSummary {
   name: string;
   system: boolean;
   perms: string[];
+  /** The Tenant admin role: always holds every tenant permission and cannot be edited or deleted. */
+  locked?: boolean;
 }
 
 export interface ApiKey {

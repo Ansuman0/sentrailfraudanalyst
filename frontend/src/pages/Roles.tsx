@@ -44,11 +44,12 @@ function RoleEditor({ role, isOwn }: { role: RoleSummary; isOwn: boolean }) {
         <input id={`name-${role.id}`} value={name} minLength={2} maxLength={60} onChange={(e) => setName(e.target.value)} disabled={isOwn || role.system} />
         {role.system && <small>Built-in role: the name is fixed, the permissions can change.</small>}
       </div>
-      <PermissionPicker value={perms} onChange={setPerms} disabled={isOwn} />
-      {isOwn && <p className="muted">This is your own role. Another admin has to change it.</p>}
+      <PermissionPicker value={perms} onChange={setPerms} disabled={isOwn || role.locked} />
+      {role.locked && <p className="muted">This role is locked: it always holds every permission and can't be edited.</p>}
+      {isOwn && !role.locked && <p className="muted">This is your own role. Another admin has to change it.</p>}
       {save.isError && <ErrorBox error={save.error} />}
       {save.isSuccess && <p className="verified">Saved. People with this role get the change on their next request.</p>}
-      {!isOwn && <div className="actions"><button className="btn primary" disabled={!changed || save.isPending}>{save.isPending ? "Saving…" : "Save role"}</button></div>}
+      {!isOwn && !role.locked && <div className="actions"><button className="btn primary" disabled={!changed || save.isPending}>{save.isPending ? "Saving…" : "Save role"}</button></div>}
     </form>
   );
 }

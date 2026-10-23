@@ -28,7 +28,7 @@ import { WalletTrace } from "./pages/WalletTrace";
 function Home() {
   const { can, canAny } = useAuth();
   if (can("cases.view")) return <Navigate to="/alerts" replace />;
-  if (canAny("orgs.manage", "platform.support")) return <Navigate to="/organizations" replace />;
+  if (canAny("platform.tenants.manage", "platform.support")) return <Navigate to="/organizations" replace />;
   if (canAny("audit.view", "platform.audit.view")) return <Navigate to="/audit" replace />;
   if (can("users.manage")) return <Navigate to="/users" replace />;
   return <Navigate to="/account" replace />;
@@ -54,14 +54,14 @@ export function App() {
         <Route path="policy" element={<RequirePerm allowed={can("cases.view")}><Policy /></RequirePerm>} />
         <Route path="audit" element={<RequirePerm allowed={canAny("audit.view", "platform.audit.view")}><Audit /></RequirePerm>} />
         <Route path="users" element={<RequirePerm allowed={can("users.manage")}><Users /></RequirePerm>} />
-        <Route path="sso" element={<RequirePerm allowed={can("users.manage")}><Sso /></RequirePerm>} />
+        <Route path="sso" element={<RequirePerm allowed={can("security.manage")}><Sso /></RequirePerm>} />
         <Route path="features" element={<RequirePerm allowed={can("features.manage")}><Features /></RequirePerm>} />
         <Route path="roles" element={<RequirePerm allowed={can("roles.manage")}><Roles /></RequirePerm>} />
-        <Route path="api-keys" element={<RequirePerm allowed={can("users.manage") && hasFeature("screening")}><ApiKeys /></RequirePerm>} />
-        <Route path="security" element={<RequirePerm allowed={can("users.manage")}><Security /></RequirePerm>} />
-        <Route path="organizations" element={<RequirePerm allowed={canAny("orgs.manage", "platform.support")}><Organizations /></RequirePerm>} />
+        <Route path="api-keys" element={<RequirePerm allowed={can("apikeys.manage") && hasFeature("screening")}><ApiKeys /></RequirePerm>} />
+        <Route path="security" element={<RequirePerm allowed={can("security.manage")}><Security /></RequirePerm>} />
+        <Route path="organizations" element={<RequirePerm allowed={canAny("platform.tenants.manage", "platform.support")}><Organizations /></RequirePerm>} />
         <Route path="platform-security" element={<RequirePerm allowed={can("platform.security.manage")}><PlatformSecurity /></RequirePerm>} />
-        <Route path="plans" element={<RequirePerm allowed={canAny("platform.plans.manage", "orgs.manage")}><Plans /></RequirePerm>} />
+        <Route path="plans" element={<RequirePerm allowed={canAny("platform.plans.manage", "platform.tenants.manage")}><Plans /></RequirePerm>} />
         <Route path="account" element={<Account />} />
         <Route path="*" element={<><h1>Page not found</h1><p className="sub">That address doesn't match any screen.</p></>} />
       </Route>

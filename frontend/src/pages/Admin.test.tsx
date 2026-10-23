@@ -12,7 +12,9 @@ const json = (status: number, body: unknown) =>
 const meWith = (permissions: string[], features = ["screening"]) => ({
   user_id: "me", name: "Asha Admin", email: "a•••@northwindremit.ca", role: "Organization admin",
   tenant: { id: "o1", name: "Northwind Remit Inc.", slug: "northwind", environment: "production", brand_color: "#0F6E56" },
-  permissions, features, mfa_enabled: true, mfa_setup: null, session_mfa: true,
+  // a user admin holds the split-out permissions too (migration 009 grants them to whoever held users.manage)
+  permissions: permissions.includes("users.manage") ? [...permissions, "users.pii.reveal", "security.manage", "apikeys.manage"] : permissions,
+  features, mfa_enabled: true, mfa_setup: null, session_mfa: true,
 });
 
 const ROLES = { roles: [{ id: "r-admin", name: "Organization admin", system: true, perms: ["users.manage"] },
@@ -191,6 +193,34 @@ describe("Roles", () => {
     ],
     warnings: ["Organization admin can both manage users and decide cases."],
   };
+
+  it("shows the locked Tenant admin role as read-only to another admin", async () => {
+    stubApi(meWith(["roles.manage"]), {
+      "GET /admin/roles": () => json(200, { roles: [
+        { id: "r-ta", name: "Tenant admin", system: true, locked: true, perms: ["users.manage", "roles.manage"] },
+        { id: "r-analyst", name: "Compliance analyst", system: true, perms: ["cases.view"] }], warnings: [] }),
+    });
+    renderAt("/roles");
+    const locked = await screen.findByRole("form", { name: "Role Tenant admin" });
+    expect(within(locked).getByText(/locked/)).toBeInTheDocument();
+    expect(within(locked).queryByRole("button", { name: "Save role" })).not.toBeInTheDocument();
+    expect(within(locked).getByRole("checkbox", { name: /Invite and manage users/ })).toBeDisabled();
+    expect(within(screen.getByRole("form", { name: "Role Compliance analyst" })).getByRole("button", { name: "Save role" })).toBeInTheDocument();
+  });
+
+  it("hides 'Reveal email' from a user admin who lacks users.pii.reveal", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/auth/refresh")) return json(200, { access_token: "t", token_type: "Bearer", expires_in: 600 });
+      if (url.endsWith("/me")) return json(200, { ...meWith(["users.manage"]), permissions: ["users.manage"] });
+      if (url.endsWith("/admin/users")) return json(200, USERS);
+      if (url.endsWith("/admin/roles")) return json(403, { detail: "no" });
+      return json(404, {});
+    }));
+    renderAt("/users");
+    expect(await screen.findByText("Ravi K.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reveal email" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Suspend" })).toBeInTheDocument();   // the other row actions are unaffected
+  });
 
   it("edits another role, keeps unknown permissions, and refuses to edit your own", async () => {
     const calls = stubApi(meWith(["roles.manage"]), {

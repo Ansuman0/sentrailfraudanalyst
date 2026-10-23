@@ -16,7 +16,7 @@ export function Organizations() {
     mutationFn: (a: { id: string; plan: string }) => platform.setOrgPlan(a.id, a.plan),
     onSuccess: () => { setPending(null); qc.invalidateQueries({ queryKey: ["orgs"] }); },
   });
-  const canMove = can("orgs.manage");
+  const canMove = can("platform.tenants.manage");
 
   return (
     <>

@@ -37,19 +37,19 @@ export function Layout() {
       title: "Administer",
       items: [
         { to: "/users", label: "Users", show: can("users.manage") },
-        { to: "/sso", label: "Company sign-in", show: can("users.manage") },
+        { to: "/sso", label: "Company sign-in", show: can("security.manage") },
         { to: "/features", label: "Features", show: can("features.manage") },
         { to: "/roles", label: "Roles", show: can("roles.manage") },
-        { to: "/api-keys", label: "API keys", show: can("users.manage") && hasFeature("screening") },
-        { to: "/security", label: "Security settings", show: can("users.manage") },
+        { to: "/api-keys", label: "API keys", show: can("apikeys.manage") && hasFeature("screening") },
+        { to: "/security", label: "Security settings", show: can("security.manage") },
       ],
     },
     {
       title: "Tenants",
       items: [
-        { to: "/organizations", label: "Organizations", show: canAny("orgs.manage", "platform.support") },
+        { to: "/organizations", label: "Organizations", show: canAny("platform.tenants.manage", "platform.support") },
         { to: "/platform-security", label: "Security baseline", show: can("platform.security.manage") },
-        { to: "/plans", label: "Plans", show: canAny("platform.plans.manage", "orgs.manage") },
+        { to: "/plans", label: "Plans", show: canAny("platform.plans.manage", "platform.tenants.manage") },
       ],
     },
   ];

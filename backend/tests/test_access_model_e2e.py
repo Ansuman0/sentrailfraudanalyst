@@ -12,7 +12,7 @@ from app.security.rbac import install_handlers
 CSRF = {"X-Sentrail-CSRF": "1"}
 from app import config, pg
 from app.access import cache, catalogue as cat
-from app.security import crypto, passwords
+from app.security import crypto, passwords, rbac
 from app.security.middleware import limiter
 import app.admin_api as api
 
@@ -120,9 +120,12 @@ mine = c.get("/me", headers=OW).json()
 ok("platform.tenants.manage" in mine["permissions"] and "orgs.manage" in mine["permissions"],
    "a Platform owner holds the new name and still shows the old alias until the cut-over")
 records.clear()
-r = c.get("/platform/orgs", headers=OW)
-ok(r.status_code == 200 and any(getattr(x, "event", "") == "permission_alias_used" and getattr(x, "permission", "") == "orgs.manage" for x in records),
-   "using the old name works and is logged as permission_alias_used")
+holder = rbac.Principal("u1", None, "Platform owner", {"platform.tenants.manage", "orgs.manage"}, set(), None, alias_names={"orgs.manage"})
+ok(holder.can("platform.tenants.manage") and not any(getattr(x, "event", "") == "permission_alias_used" for x in records),
+   "using the new name is not an alias use")
+ok(holder.can("orgs.manage") and any(getattr(x, "event", "") == "permission_alias_used" and getattr(x, "permission", "") == "orgs.manage" for x in records),
+   "asking for an old name still works and is logged as permission_alias_used")
+ok(c.get("/platform/orgs", headers=OW).status_code == 200, "the platform routes now ask for platform.tenants.manage and work for the owner")
 
 # ---------------- locked Tenant admin through the API ----------------
 lead = c.post("/admin/roles", headers=A, json={"name": "Role keeper", "perms": ["roles.manage", "users.manage"]}).json()["id"]

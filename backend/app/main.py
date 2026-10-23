@@ -82,9 +82,58 @@ def list_alerts(band: str | None = Query(None, pattern="^(high|medium|low)$"),
 @app.get("/cases/{alert_id}")
 def get_case(alert_id: str, p: Principal = Depends(require("cases.view"))):
     alert = _case_or_404(p, alert_id)
+    db.audit_view(p, alert_id, alert["restricted"])
     detail, _ = _case_detail(p, alert)
-    db.audit(p, "viewed_case", alert_id)
     return {"alert": alert, **detail}
+
+
+class RestrictIn(BaseModel):
+    restricted: bool
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class GrantIn(BaseModel):
+    user_id: uuid.UUID
+
+
+@app.put("/cases/{alert_id}/restricted")
+def restrict_case(alert_id: str, body: RestrictIn, p: Principal = Depends(require("cases.decide", "cases.restricted.view"))):
+    """Mark a case need-to-know (for example one involving a colleague) or open it again. Needs both the right to work cases and the
+    right to see restricted ones, so nobody can hide a case from themselves by accident or lock a colleague out of it."""
+    _case_or_404(p, alert_id)
+    try:
+        db.set_restricted(p, alert_id, body.restricted, body.reason)
+    except db.NotFound:
+        raise HTTPException(404, "Alert not found")
+    except db.Conflict as e:
+        raise HTTPException(409, str(e))
+    return {"alert_id": alert_id, "restricted": body.restricted}
+
+
+@app.get("/cases/{alert_id}/access")
+def case_access(alert_id: str, p: Principal = Depends(require("cases.restricted.view"))):
+    _case_or_404(p, alert_id)
+    return {"people": db.case_access_list(p, alert_id)}
+
+
+@app.post("/cases/{alert_id}/access")
+def grant_access(alert_id: str, body: GrantIn, p: Principal = Depends(require("cases.decide", "cases.restricted.view"))):
+    _case_or_404(p, alert_id)
+    try:
+        db.grant_case_access(p, alert_id, str(body.user_id))
+    except db.Conflict as e:
+        raise HTTPException(409, str(e))
+    return {"alert_id": alert_id, "user_id": str(body.user_id)}
+
+
+@app.delete("/cases/{alert_id}/access/{user_id}")
+def revoke_access(alert_id: str, user_id: uuid.UUID, p: Principal = Depends(require("cases.decide", "cases.restricted.view"))):
+    _case_or_404(p, alert_id)
+    try:
+        db.revoke_case_access(p, alert_id, str(user_id))
+    except db.NotFound:
+        raise HTTPException(404, "That person isn't on the list")
+    return {"revoked": str(user_id)}
 
 
 @app.get("/search")
@@ -99,13 +148,16 @@ def search(q: str = Query(max_length=200), reason: str = Query(min_length=3), p:
         return {"kind": kind["kind"], "customers": [], "note": "No transaction history is loaded for your organization"}
     if kind["kind"] == "customer":
         try:
+            if db.customer_hidden(p, kind["value"]):          # their only cases are restricted ones this person can't see
+                raise cases.NoData(kind["value"])
             return {"kind": "customer", "result": cases.score_customer(p.org_id, kind["value"])}
         except cases.NoData:
             raise HTTPException(404, "No customer with that ID in your organization's data")
     t, *_ = cases.load(p.org_id)
     col = {"account": "account_id", "card": "card_last4", "tx_hash": "txn_id"}.get(kind["kind"])
     if col and col in t:
-        return {"kind": kind["kind"], "customers": t[t[col].astype(str) == kind["value"]].customer_id.unique().tolist()[:20]}
+        found = t[t[col].astype(str) == kind["value"]].customer_id.unique().tolist()
+        return {"kind": kind["kind"], "customers": [c for c in found if not db.customer_hidden(p, c)][:20]}
     return {"kind": kind["kind"], "customers": []}
 
 
@@ -322,3 +374,8 @@ def set_policy(body: PolicyIn, p: Principal = Depends(require("policy.edit"))):
     db.set_policy(p, body.model_dump())
     db.audit(p, "policy_change", "screening", {"before": before, "after": body.model_dump()})
     return body
+
+
+# The API refuses to start if any route lacks a declared permission (see app/access/routes.py).
+from app.access.routes import check_routes  # noqa: E402
+check_routes(app)

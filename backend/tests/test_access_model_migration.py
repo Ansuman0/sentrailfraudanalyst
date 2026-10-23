@@ -206,7 +206,14 @@ ok(q("SELECT old_key, new_keys FROM permission_aliases ORDER BY 1") == [(k, list
    "permission_aliases equals the catalogue")
 with psycopg.connect(OWNER_URL, autocommit=True) as oc:
     ok(cat.sync(oc) == {"owner_added": 0, "tenant_admin_added": 0}, "catalogue sync is idempotent")
-    s.execute("DELETE FROM role_permissions WHERE role_id=%s AND perm='platform.tenants.delete'", (OWNER,))
+    try:
+        s.execute("DELETE FROM role_permissions WHERE role_id=%s AND perm='platform.tenants.delete'", (OWNER,))
+        ok(False, "the Platform owner role is locked in the database")
+    except psycopg.Error:
+        ok(True, "the Platform owner role is locked in the database too (migration 011)")
+    with s.transaction():       # only the catalogue sync / tenant deletion set this switch; no API path does
+        s.execute("SELECT set_config('app.role_sync', 'on', true)")
+        s.execute("DELETE FROM role_permissions WHERE role_id=%s AND perm='platform.tenants.delete'", (OWNER,))
     sv = q("SELECT session_version FROM users WHERE id=%s", people["platform:owner"])[0][0]
     ok(cat.sync(oc)["owner_added"] == 1, "sync gives the Platform owner a missing platform permission back")
     ok(q("SELECT session_version FROM users WHERE id=%s", people["platform:owner"])[0][0] == sv + 1, "and ends the owner's sessions so they reload")
@@ -222,7 +229,9 @@ ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["plat
 
 # ---- down ----
 r = migrate("--down")
-ok(r.returncode == 0 and "reverted 010_sessions_and_devices.sql" in r.stdout, "migration 010 reverts first")
+ok(r.returncode == 0 and "reverted 011_row_level_security_v2.sql" in r.stdout, "migration 011 reverts first")
+r = migrate("--down")
+ok(r.returncode == 0 and "reverted 010_sessions_and_devices.sql" in r.stdout, "then migration 010")
 ok(q("SELECT to_regclass('user_devices') IS NULL")[0][0] and q("SELECT count(*) FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='scope'")[0][0] == 0,
    "010's table and columns are gone")
 r = migrate("--down")
@@ -243,7 +252,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout, "migrations 009 and 010 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout, "migrations 009, 010 and 011 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),
