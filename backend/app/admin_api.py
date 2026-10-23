@@ -1,5 +1,6 @@
 """Identity, organizations, users, roles, features, security settings and audit."""
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -153,6 +154,7 @@ def login(request: Request, response: Response, body: Login):
             if passwords.needs_rehash(pw_hash):
                 cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (passwords.hash_password(body.password), uid))
             cur.execute("UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=%s", (uid,))
+            _require_open_tenant(uid, org)
             if not mfa_enabled:
                 # No two-factor yet: a password-only session. The API limits it (rbac.current_user) until the
                 # user sets two-factor up, or, where the organization allows it, chooses to skip it.
@@ -224,11 +226,29 @@ def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="p
             "expires_in": int(ttl.total_seconds())}
 
 
+def _require_open_tenant(uid, org):
+    """Old model: a person whose tenant is suspended, pending or deleted is refused at sign-in (new model: the tenant is simply absent from
+    their choices). Checked as soon as the password is right, so a second factor is never asked for a tenant that can't be entered."""
+    if org is None or config.ACCESS_MODEL_V2:
+        return
+    with pg.pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT tenant_status FROM membership_lookup(%s) WHERE tenant_id=%s", (uid, org))
+        st = cur.fetchone()
+    if st and st[0] not in ("active", "trial"):
+        raise HTTPException(403, "Your organization's access is suspended or not open yet. Contact your administrator")
+
+
 def _route(uid, home_org) -> dict:
     """Where a fresh sign-in lands (brief 3.5). Old model: the user's own organization, or the console for platform staff.
     New model (ACCESS_MODEL_V2): platform staff -> console; exactly one active membership -> that tenant; several -> the picker
     (a session with no tenant yet); none -> the no-access page (also tenant-less)."""
     if not config.ACCESS_MODEL_V2:
+        if home_org is not None:
+            with pg.pool().connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT tenant_status FROM membership_lookup(%s) WHERE tenant_id=%s", (uid, home_org))
+                st = cur.fetchone()
+            if st and st[0] not in ("active", "trial"):
+                raise HTTPException(403, "Your organization's access is suspended or not open yet. Contact your administrator")
         return {"route": "console" if home_org is None else "tenant", "org": home_org, "role_id": None,
                 "scope": "platform" if home_org is None else "tenant", "tenants": []}
     staff, mems = _memberships(uid)
@@ -542,15 +562,17 @@ class OrgIn(BaseModel):
     plan: str = Field("professional", pattern="^(starter|professional|enterprise)$")
     features: list[str] | None = None        # default: whatever the plan includes
     admin_email: EmailStr
+    slug: str | None = Field(None, min_length=3, max_length=40, pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$")   # permanent: it never changes
 
 
 def provision_org(cur, legal_name, business_type, registration, data_region="ca-central", plan="professional",
-                  environment="production", brand_color="#0F6E56", features=None):
-    """Create an organization with its system roles, settings, features and policy. Used by the API and the seed."""
-    slug = re.sub(r"[^a-z0-9]+", "-", legal_name.lower()).strip("-")[:40] + "-" + secrets.token_hex(2)
+                  environment="production", brand_color="#0F6E56", features=None, status="active", slug=None):
+    """Create an organization with its system roles, settings, features and policy. Used by the API and the seed.
+    The API creates tenants `pending`; they become `active` when their first Tenant admin accepts the invitation."""
+    slug = slug or re.sub(r"[^a-z0-9]+", "-", legal_name.lower()).strip("-")[:40] + "-" + secrets.token_hex(2)
     cur.execute("""INSERT INTO organizations (legal_name, business_type, registration, data_region, plan, slug, environment, brand_color, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
-                (legal_name, business_type, registration, data_region, plan, slug, environment, brand_color))
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (legal_name, business_type, registration, data_region, plan, slug, environment, brand_color, status))
     org = cur.fetchone()[0]
     if features is None:
         cur.execute("SELECT features FROM plans WHERE key=%s", (plan,))
@@ -575,18 +597,38 @@ def provision_org(cur, legal_name, business_type, registration, data_region="ca-
 
 @router.post("/platform/orgs")
 def create_org(body: OrgIn, p: Principal = Depends(require("platform.tenants.manage"))):
+    """Create a tenant: validated slug, status `pending`, its roles and baseline settings, an audit entry, and a 72-hour invitation for
+    its first Tenant admin (or a membership when that email already has an account). It becomes `active` when the invitation is accepted."""
     if body.features and not set(body.features) <= set(FEATURES):
         raise HTTPException(400, "Unknown feature")
+    # no actor here: provision_org also writes the NEW tenant's own rows (its policy), which nobody is a member of yet
     with pg.tx(platform=True) as cur:
         cur.execute("SELECT allowed_regions FROM platform_settings")
         if body.data_region not in cur.fetchone()[0]:
             raise HTTPException(422, "That data region isn't allowed on this platform")
+        if body.slug:
+            cur.execute("SELECT 1 FROM organizations WHERE slug=%s", (body.slug,))
+            if cur.fetchone():
+                raise HTTPException(409, "That slug is taken. A slug is permanent, so pick the one you want to keep")
         org, role_ids = provision_org(cur, body.legal_name, body.business_type, body.registration, body.data_region,
-                                      body.plan, body.environment, body.brand_color, body.features)
-        link = _invite(cur, org, body.legal_name, body.admin_email, role_ids[TENANT_ADMIN], TENANT_ADMIN, None)
-        _audit(cur, p, "org_created", body.legal_name, {"plan": body.plan, "features": body.features,
-               "admin": crypto.mask_email(body.admin_email)}, org_id=org)
-    return {"org_id": str(org), "invited": crypto.mask_email(body.admin_email), **({"dev_link": link} if _dev() else {})}
+                                      body.plan, body.environment, body.brand_color, body.features, status="pending", slug=body.slug)
+        link, joined = None, False
+        cur.execute("SELECT id FROM auth_lookup(%s)", (crypto.blind_index(body.admin_email),))
+        known = cur.fetchone()
+        if known and config.ACCESS_MODEL_V2:
+            # The email already has an account: it gets a membership in the new tenant (Tenant admin) and the tenant is live at once.
+            cur.execute("""INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status) VALUES (%s,%s,%s,'active')""",
+                        (known[0], org, role_ids[TENANT_ADMIN]))
+            cur.execute("UPDATE organizations SET status='active', status_changed_at=now() WHERE id=%s", (org,))
+            joined = True
+        else:
+            link = _invite(cur, org, body.legal_name, body.admin_email, role_ids[TENANT_ADMIN], TENANT_ADMIN, p.user_id)
+        detail = {"plan": body.plan, "features": body.features, "slug": body.slug, "admin": crypto.mask_email(body.admin_email),
+                  "first_admin": "added as a member" if joined else "invited (72 hours)"}
+        _audit(cur, p, "tenant_created", body.legal_name, detail, org_id=org)      # the tenant's own log starts with who created it
+        _audit(cur, p, "tenant_created", body.legal_name, {**detail, "org_id": str(org)})   # and the platform log
+    return {"org_id": str(org), "status": "active" if joined else "pending", "invited": crypto.mask_email(body.admin_email),
+            **({"dev_link": link} if (_dev() and link) else {})}
 
 
 @router.get("/platform/orgs")
@@ -663,10 +705,21 @@ class InviteIn(BaseModel):
     role_id: uuid.UUID
 
 
+def _require_seat(cur, org):
+    """The plan's seat limit: active memberships may not exceed it (None = unlimited)."""
+    cur.execute("""SELECT pl.name, pl.max_users, (SELECT count(*) FROM tenant_memberships m WHERE m.tenant_id=o.id AND m.status='active')
+                   FROM organizations o JOIN plans pl ON pl.key=o.plan WHERE o.id=%s""", (org,))
+    name, limit, used = cur.fetchone()
+    if limit is not None and used >= limit:
+        raise HTTPException(409, f"The {name} plan includes {limit} people and all {limit} seats are in use. "
+                                 "Suspend or remove someone, or ask for a plan change")
+
+
 @router.post("/admin/invitations")
 @limiter.limit("30/hour")
 def invite(request: Request, body: InviteIn, p: Principal = Depends(require("users.manage"))):
     with pg.tx(p.org_id, actor=p.actor) as cur:
+        _require_seat(cur, p.org_id)
         role = _role_in_org(cur, body.role_id, p.org_id)
         _no_escalation(cur, p, body.role_id)
         link = _invite(cur, p.org_id, _org_name(p.org_id), body.email, body.role_id, role, p.user_id)
@@ -723,16 +776,30 @@ def accept(request: Request, body: AcceptIn):
         else:
             cur.execute("SELECT min_password_len FROM security_settings WHERE org_id=%s", (org,))
         min_len = cur.fetchone()[0]
-        cur.execute("SELECT email_enc FROM users WHERE id=%s FOR UPDATE", (uid,))
-        email = crypto.decrypt(cur.fetchone()[0], org, "email")
+        cur.execute("SELECT u.email_enc, r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s FOR UPDATE", (uid,))
+        email_enc, role_name = cur.fetchone()
+        email = crypto.decrypt(email_enc, org, "email")
         problems = passwords.check_policy(body.password, min_len, [body.full_name, *body.full_name.split(), email.split("@")[0]])
         if problems:
             raise HTTPException(422, problems)
-        cur.execute("""UPDATE users SET name_enc=%s, password_hash=%s, status='active' WHERE id=%s""",
-                    (crypto.encrypt(body.full_name, org, "name"), passwords.hash_password(body.password), uid))
+        first_admin = False
+        if org is not None:
+            cur.execute("SELECT status FROM organizations WHERE id=%s", (org,))
+            if cur.fetchone()[0] in ("suspended", "deleted"):
+                raise HTTPException(409, "This organization isn't active, so the invitation can't be accepted right now")
+            _require_seat(cur, org)               # checked again here: seats may have filled since the invitation went out
+            first_admin = role_name == TENANT_ADMIN
+        cur.execute("""UPDATE users SET name_enc=%s, password_hash=%s, status='active', mfa_mandatory=%s WHERE id=%s""",
+                    (crypto.encrypt(body.full_name, org, "name"), passwords.hash_password(body.password), first_admin, uid))
         cur.execute("UPDATE invitations SET accepted_at=now() WHERE id=%s", (inv_id,))
-        audit.write(cur, org, uid, None, "user_enrolled", None, {"mfa": "after_sign_in"}, client_ip(request))
-    return {"activated": True, "next": "Sign in with your email and new password"}
+        audit.write(cur, org, uid, None, "user_enrolled", None, {"mfa": "required" if first_admin else "after_sign_in"}, client_ip(request))
+        if first_admin:
+            cur.execute("""UPDATE organizations SET status='active', status_changed_at=now() WHERE id=%s AND status='pending' RETURNING 1""", (org,))
+            if cur.fetchone():
+                audit.write(cur, org, uid, None, "tenant_activated", None, {"by": "first Tenant admin accepted the invitation"}, client_ip(request))
+    return {"activated": True,
+            "next": "Sign in with your email and new password, then set up two-factor authentication (required for Tenant admins)"
+                    if first_admin else "Sign in with your email and new password"}
 
 
 # =====================================================================
@@ -1559,6 +1626,179 @@ def support_list_users(org_id: uuid.UUID, reason: str, p: Principal = Depends(re
              "status": r[3], "sign_in_set_up": r[4], "last_login": r[5]} for r in rows]
 
 
+# =====================================================================
+# Tenant lifecycle: suspend / reactivate, delete (second-owner approval), replace the Tenant admin
+# =====================================================================
+class StatusIn(BaseModel):
+    status: str = Field(pattern="^(active|suspended)$")
+    reason: str = Field(min_length=5, max_length=500)
+
+
+STATUS_TRANSITIONS = {("active", "suspended"), ("trial", "suspended"), ("suspended", "active")}
+
+
+def _end_tenant_sessions(cur, org_id):
+    """Every session inside the tenant ends now (and every person's permissions are re-read)."""
+    cur.execute("""UPDATE refresh_tokens SET revoked_at=now() WHERE revoked_at IS NULL
+                   AND (tenant_id=%s OR user_id IN (SELECT id FROM users WHERE org_id=%s))""", (org_id, org_id))
+    cur.execute("UPDATE users SET session_version=session_version+1 WHERE org_id=%s", (org_id,))
+
+
+@router.post("/platform/orgs/{org_id}/status")
+def set_org_status(org_id: uuid.UUID, body: StatusIn, p: Principal = Depends(require("platform.tenants.manage"))):
+    """Suspend a tenant (nobody can sign in, every session and API key stops, data is kept) or reactivate it."""
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("SELECT status, legal_name FROM organizations WHERE id=%s FOR UPDATE", (org_id,))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Organization not found")
+        if (r[0], body.status) not in STATUS_TRANSITIONS:
+            raise HTTPException(409, f"A {r[0]} organization can't become {body.status}")
+        cur.execute("UPDATE organizations SET status=%s, status_reason=%s, status_changed_at=now() WHERE id=%s", (body.status, body.reason, org_id))
+        if body.status == "suspended":
+            _end_tenant_sessions(cur, org_id)
+        action = "tenant_suspended" if body.status == "suspended" else "tenant_reactivated"
+        _audit(cur, p, action, r[1], {"reason": body.reason, "from": r[0]}, org_id=org_id)
+        _audit(cur, p, action, r[1], {"reason": body.reason, "org_id": str(org_id)})
+    return {"org_id": str(org_id), "status": body.status}
+
+
+APPROVAL_PERMS = {"tenant.delete": "platform.tenants.delete"}        # phase 5 adds owner changes and loosening the security baseline
+APPROVAL_VIEW = ("platform.tenants.delete", "platform.owners.manage", "platform.security.manage")
+
+
+@router.post("/platform/orgs/{org_id}/delete")
+def request_org_delete(org_id: uuid.UUID, body: Reason, p: Principal = Depends(require("platform.tenants.delete"))):
+    """Ask to delete a tenant. Nothing happens until a SECOND owner approves within 24 hours (POST /platform/approvals/{id}/approve)."""
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("SELECT status, legal_name FROM organizations WHERE id=%s", (org_id,))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Organization not found")
+        if r[0] == "deleted":
+            raise HTTPException(409, "This organization is already deleted")
+        cur.execute("""SELECT 1 FROM platform_approvals WHERE action='tenant.delete' AND status='pending' AND expires_at > now()
+                       AND payload->>'org_id'=%s""", (str(org_id),))
+        if cur.fetchone():
+            raise HTTPException(409, "A deletion request for this organization is already waiting for a second owner")
+        cur.execute("""INSERT INTO platform_approvals (action, payload, requested_by, reason, expires_at)
+                       VALUES ('tenant.delete', %s, %s, %s, now() + interval '24 hours') RETURNING id, expires_at""",
+                    (json.dumps({"org_id": str(org_id), "name": r[1]}), p.user_id, body.reason))
+        aid, exp = cur.fetchone()
+        _audit(cur, p, "approval_requested", str(aid), {"action": "tenant.delete", "org": r[1], "reason": body.reason})
+    return {"approval_id": str(aid), "expires_at": exp, "next": "A second Platform owner has to approve this within 24 hours"}
+
+
+@router.get("/platform/approvals")
+def list_approvals(p: Principal = Depends(require_any(*APPROVAL_VIEW))):
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("""SELECT id, action, payload, requested_by, approved_by, status, reason, created_at, decided_at, expires_at
+                       FROM platform_approvals ORDER BY created_at DESC LIMIT 100""")
+        return [{"id": str(r[0]), "action": r[1], "payload": r[2], "requested_by": str(r[3]), "approved_by": str(r[4]) if r[4] else None,
+                 "status": "expired" if r[5] == "pending" and r[9] < _now() else r[5], "reason": r[6], "created_at": r[7],
+                 "decided_at": r[8], "expires_at": r[9]} for r in cur.fetchall()]
+
+
+def _delete_tenant(cur, p: Principal, org_id, name, reason, approval_id):
+    cur.execute("SELECT retention_years FROM security_settings WHERE org_id=%s", (org_id,))
+    years = (cur.fetchone() or [5])[0]
+    cur.execute("""UPDATE organizations SET status='deleted', deleted_at=now(), status_reason=%s, status_changed_at=now(),
+                   deletion_due_at = now() + make_interval(years => %s) WHERE id=%s RETURNING deletion_due_at""", (reason, years, org_id))
+    due = cur.fetchone()[0]
+    _end_tenant_sessions(cur, org_id)
+    detail = {"reason": reason, "approval": str(approval_id), "data_removal_due": due.isoformat(), "retention_years": years}
+    _audit(cur, p, "tenant_deleted", name, detail, org_id=org_id)
+    _audit(cur, p, "tenant_deleted", name, {**detail, "org_id": str(org_id)})
+    return due
+
+
+def _decide(approval_id, p: Principal, approve: bool, note: str | None = None):
+    error = None
+    org_for_keys = None
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("""SELECT action, payload, requested_by, status, expires_at, reason FROM platform_approvals WHERE id=%s FOR UPDATE""", (approval_id,))
+        a = cur.fetchone()
+        if not a:
+            raise HTTPException(404, "Approval not found")
+        action, payload, requester, status, expires, reason = a
+        if status != "pending":
+            raise HTTPException(409, f"This request is already {status}")
+        if expires < _now():
+            cur.execute("UPDATE platform_approvals SET status='expired', decided_at=now() WHERE id=%s", (approval_id,))
+            error = HTTPException(410, "This request expired after 24 hours. Ask again")
+        elif not p.can(APPROVAL_PERMS.get(action, "platform.owners.manage")):
+            raise HTTPException(403, "Your role can't decide this kind of request")
+        elif str(requester) == p.user_id:
+            raise HTTPException(403, "A second Platform owner has to decide this: you can't approve your own request")
+        elif not approve:
+            cur.execute("UPDATE platform_approvals SET status='denied', approved_by=NULL, decided_at=now() WHERE id=%s", (approval_id,))
+            _audit(cur, p, "approval_denied", str(approval_id), {"action": action, "note": note})
+        else:
+            cur.execute("UPDATE platform_approvals SET status='approved', approved_by=%s, decided_at=now() WHERE id=%s", (p.user_id, approval_id))
+            _audit(cur, p, "approval_approved", str(approval_id), {"action": action})
+            if action == "tenant.delete":
+                org_for_keys = payload["org_id"]
+                due = _delete_tenant(cur, p, org_for_keys, payload.get("name"), reason, approval_id)
+    if error:
+        raise error
+    if org_for_keys:
+        with pg.tx(org_for_keys) as cur:        # API keys are tenant data: revoked from inside the tenant scope
+            cur.execute("UPDATE api_keys SET revoked_at=now() WHERE revoked_at IS NULL")
+        return {"status": "approved", "executed": "tenant.delete", "data_removal_due": due}
+    return {"status": "approved" if approve else "denied"}
+
+
+@router.post("/platform/approvals/{approval_id}/approve")
+def approve_request(approval_id: uuid.UUID, p: Principal = Depends(require_any(*APPROVAL_VIEW))):
+    return _decide(approval_id, p, True)
+
+
+@router.post("/platform/approvals/{approval_id}/deny")
+def deny_request(approval_id: uuid.UUID, body: Reason, p: Principal = Depends(require_any(*APPROVAL_VIEW))):
+    return _decide(approval_id, p, False, body.reason)
+
+
+class AdminRecoveryIn(BaseModel):
+    email: EmailStr
+    reason: str = Field(min_length=5, max_length=500)
+
+
+@router.post("/platform/orgs/{org_id}/admin")
+def assign_tenant_admin(org_id: uuid.UUID, body: AdminRecoveryIn, p: Principal = Depends(require("platform.tenants.manage"))):
+    """When a tenant has lost its administrator: make this person its Tenant admin (a member is promoted, anyone else is invited for
+    72 hours). Needs a reason and is written to the tenant's audit log AND the platform's."""
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("SELECT status, legal_name FROM organizations WHERE id=%s FOR UPDATE", (org_id,))
+        org = cur.fetchone()
+        if not org:
+            raise HTTPException(404, "Organization not found")
+        if org[0] == "deleted":
+            raise HTTPException(409, "This organization is deleted")
+        cur.execute("SELECT id FROM roles WHERE org_id=%s AND name=%s", (org_id, TENANT_ADMIN))
+        admin_role = cur.fetchone()[0]
+        cur.execute("SELECT id, org_id FROM auth_lookup(%s)", (crypto.blind_index(body.email),))
+        known = cur.fetchone()
+        link, how = None, "invited (72 hours)"
+        if known and known[1] == org_id:
+            cur.execute("""UPDATE users SET role_id=%s, status='active', mfa_mandatory=true, session_version=session_version+1
+                           WHERE id=%s AND status <> 'invited'""", (admin_role, known[0]))
+            if cur.rowcount == 0:
+                raise HTTPException(409, "That person hasn't accepted their invitation yet. Resend it from the user list instead")
+            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (known[0],))
+            how = "promoted"
+        elif known and config.ACCESS_MODEL_V2:
+            cur.execute("""INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status) VALUES (%s,%s,%s,'active')
+                           ON CONFLICT (user_id, tenant_id) DO UPDATE SET role_id=EXCLUDED.role_id, status='active'""",
+                        (known[0], org_id, admin_role))
+            how = "added as a member"
+        else:
+            link = _invite(cur, org_id, org[1], body.email, admin_role, TENANT_ADMIN, p.user_id)
+        detail = {"reason": body.reason, "who": crypto.mask_email(body.email), "how": how}
+        _audit(cur, p, "tenant_admin_assigned", org[1], detail, org_id=org_id)
+        _audit(cur, p, "tenant_admin_assigned", org[1], {**detail, "org_id": str(org_id)})
+    return {"ok": True, "how": how, **({"dev_link": link} if (_dev() and link) else {})}
+
+
 @router.post("/platform/orgs/{org_id}/users/{uid}/resend-invitation")
 def support_resend(org_id: uuid.UUID, uid: uuid.UUID, body: Reason, p: Principal = Depends(require("platform.support"))):
     with pg.tx(org_id, platform=True) as cur:
@@ -1566,12 +1806,14 @@ def support_resend(org_id: uuid.UUID, uid: uuid.UUID, body: Reason, p: Principal
         r = cur.fetchone()
         if not r or r[1] != "invited":
             raise HTTPException(409, "Only pending invitations can be resent")
+        link = None
         if AUTH_MODE == "keycloak" and r[2]:
             kc().send_setup_email(r[2])
         else:
             raw = tokens.new_opaque()
             cur.execute("""INSERT INTO invitations (org_id, user_id, token_hash, invited_by, expires_at)
                            VALUES (%s,%s,%s,%s, now() + interval '72 hours')""", (org_id, uid, crypto.sha256(raw), p.user_id))
-            mailer.send_invitation(crypto.decrypt(r[0], org_id, "email"), _org_name(org_id), "your role", f"{APP_URL}/join#{raw}")
+            link = f"{APP_URL}/join#{raw}"
+            mailer.send_invitation(crypto.decrypt(r[0], org_id, "email"), _org_name(org_id), "your role", link)
         _audit(cur, p, "support_resent_invitation", str(uid), {"reason": body.reason}, org_id=org_id)
-    return {"ok": True}
+    return {"ok": True, **({"dev_link": link} if (_dev() and link) else {})}

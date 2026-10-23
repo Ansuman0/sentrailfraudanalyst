@@ -83,7 +83,7 @@ Written, never run (K-13): `infra/gcp`, `docker-compose.gcp.yml`, `scripts/deplo
 
 
 ## Access model v2 work (2026-10-23)
-Phase 2 (sign-in and session) is also done on the branch (see CHANGELOG). Phase 3 (authorization and isolation: actor-aware row-level security, restricted cases, read auditing, route check, isolation suite) is done too. Not yet run on the AWS host; the demo users there are unchanged.
+Phase 2 (sign-in and session) is also done on the branch (see CHANGELOG). Phase 3 (authorization and isolation: actor-aware row-level security, restricted cases, read auditing, route check, isolation suite) is done too. Phase 4 (tenant lifecycle: pending/active/suspended/deleted, seats, delete with second-owner approval, admin recovery) is done on the branch as well. Not yet run on the AWS host; the demo users there are unchanged.
 Phase 0 and Phase 1 done locally on branch `access-v2/phase-1` (uncommitted until asked). Main and the AWS host are unchanged: pushing migration 009 to main would run it on the live database at the next deploy, so it waits for the Phase 9 cut-over. Next: Phase 2 (sign-in and session) after approval.
 
 ## Demo data on the AWS server (2026-10-23)

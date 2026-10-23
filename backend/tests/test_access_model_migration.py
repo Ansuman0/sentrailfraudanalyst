@@ -229,7 +229,10 @@ ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["plat
 
 # ---- down ----
 r = migrate("--down")
-ok(r.returncode == 0 and "reverted 011_row_level_security_v2.sql" in r.stdout, "migration 011 reverts first")
+ok(r.returncode == 0 and "reverted 012_tenant_lifecycle.sql" in r.stdout, "migration 012 reverts first")
+ok(q("SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_mandatory'")[0][0] == 0, "012's columns are gone")
+r = migrate("--down")
+ok(r.returncode == 0 and "reverted 011_row_level_security_v2.sql" in r.stdout, "then migration 011")
 r = migrate("--down")
 ok(r.returncode == 0 and "reverted 010_sessions_and_devices.sql" in r.stdout, "then migration 010")
 ok(q("SELECT to_regclass('user_devices') IS NULL")[0][0] and q("SELECT count(*) FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='scope'")[0][0] == 0,
@@ -252,7 +255,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout, "migrations 009, 010 and 011 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout, "migrations 009 to 012 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),

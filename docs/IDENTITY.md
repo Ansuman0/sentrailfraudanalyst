@@ -159,3 +159,18 @@ API keys `apikeys.manage`, revealing an email `users.pii.reveal`, tenant adminis
 then proves B's data was neither returned, changed nor logged (`ISOLATION_NEGATIVE_CONTROL=1` switches row-level security off to prove the suite can
 fail). `test_authorization_e2e` covers separation of duties, row-level security by actor, restricted cases, read auditing and the check order.
 Background jobs register in `app/access/jobs.py` and join the isolation run (there are none yet).
+
+## Tenant lifecycle (access model v2, phase 4)
+
+`pending` -> `active` <-> `suspended` -> `deleted` (`trial` still exists for old rows).
+
+| Step | How | What happens |
+|---|---|---|
+| Create | `POST /platform/orgs` (`platform.tenants.manage`) | slug validated (permanent, unique), tenant `pending`, its four roles (Tenant admin locked), the platform security baseline copied, audit entry in the tenant's log and the platform's, a 72-hour invitation for the first Tenant admin. With the new model, an email that already has an account gets a membership instead and the tenant is active at once. |
+| Activate | the first admin accepts the invitation | password (or company sign-in), tenant becomes `active` (`tenant_activated`), and **two-factor is mandatory** for them (`users.mfa_mandatory`): until they set it up, only the setup screens answer. |
+| Invite members | `POST /admin/invitations` | refused when active memberships already fill the plan (Starter 5, Professional 25, Enterprise unlimited); checked again when the invitation is accepted. Expired invitations (72 h) answer 410; platform support or an owner resends them (`POST /platform/orgs/{id}/users/{uid}/resend-invitation`). |
+| Suspend / reactivate | `POST /platform/orgs/{id}/status {status, reason}` | suspended: nobody can sign in, every session ends, every API key is refused, data is kept. Only active/trial -> suspended and suspended -> active. Audited with the reason in both logs. |
+| Delete | `POST /platform/orgs/{id}/delete {reason}` then a **second** Platform owner `POST /platform/approvals/{id}/approve` within 24 hours | marks the tenant `deleted`, ends sessions, revokes API keys and schedules the data removal after the retention period (`deletion_due_at`; the removal job arrives in phase 7). The requester can't approve (API and database), approvals expire after 24 hours, and `deny` is available to a second owner. |
+| Replace a lost admin | `POST /platform/orgs/{id}/admin {email, reason}` | an existing member is promoted, anyone else invited for 72 hours; the reason is written to the tenant's log and the platform's (`tenant_admin_assigned`). |
+
+Approvals (`GET /platform/approvals`) are the generic second-owner mechanism; phase 5 adds owner changes and loosening the security baseline to it.

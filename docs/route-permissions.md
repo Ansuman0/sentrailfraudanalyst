@@ -53,11 +53,17 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | POST | `/me/sessions/end-others` | signed in (own account only) |
 | DELETE | `/me/sessions/{family_id}` | signed in (own account only) |
 | GET | `/me/tenants` | signed in (own account only) |
+| GET | `/platform/approvals` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
+| POST | `/platform/approvals/{approval_id}/approve` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
+| POST | `/platform/approvals/{approval_id}/deny` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
 | POST | `/platform/invitations` | `platform.users.manage` |
 | GET | `/platform/orgs` | any of `platform.support`, `platform.tenants.manage` |
 | POST | `/platform/orgs` | `platform.tenants.manage` |
+| POST | `/platform/orgs/{org_id}/admin` | `platform.tenants.manage` |
+| POST | `/platform/orgs/{org_id}/delete` | `platform.tenants.delete` |
 | PUT | `/platform/orgs/{org_id}/features` | `platform.plans.manage` |
 | PUT | `/platform/orgs/{org_id}/plan` | `platform.tenants.manage` |
+| POST | `/platform/orgs/{org_id}/status` | `platform.tenants.manage` |
 | GET | `/platform/orgs/{org_id}/users` | `platform.support` |
 | POST | `/platform/orgs/{org_id}/users/{uid}/resend-invitation` | `platform.support` |
 | GET | `/platform/plans` | any of `platform.plans.manage`, `platform.tenants.manage` |

@@ -5,6 +5,8 @@ a developer machine. Backend: 160 checks, frontend: 23 tests, all passing. See [
 
 ## Changed
 
+- **Tenant lifecycle (access model v2, in progress, not released)**: a new organization starts pending and goes live when its first admin accepts the 72-hour invitation (and sets up two-factor); platform owners can suspend and reactivate it, delete it only with a second owner's approval, and appoint a replacement admin; plans now enforce their seat limits. See [docs/IDENTITY.md](docs/IDENTITY.md).
+
 - **Isolation and need-to-know (access model v2, in progress, not released)**: the database itself now refuses a person who has lost their membership; a case can be marked restricted so only people with restricted-case access or named on it can open it; case and STR views are audited; the Tenant admin role is read-only on the roles screen; "Reveal email", security settings and API keys have their own permissions. See [docs/IDENTITY.md](docs/IDENTITY.md).
 
 - **Sign-in and sessions (access model v2, in progress, not released)**: one sign-in for everyone that routes to the console, one tenant, a tenant picker or a no-access page; a header switcher for people in several organizations; a "Confirm it's you" prompt (fresh two-factor check) before sensitive actions; accounts lock after 10 wrong passwords from one network in 15 minutes; sign-out ends a session immediately; you are told by email about sign-ins from a new device and about two-factor and role changes. See [docs/IDENTITY.md](docs/IDENTITY.md).

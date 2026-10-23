@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import uuid
 import pyotp
 import psycopg
 os.environ.setdefault("AUTH_MODE", "local")
@@ -94,7 +95,7 @@ before = snapshot_b()
 # What the callers send
 # ---------------------------------------------------------------------------------------------------------------------
 VALUES = {"alert_id": B_ALERT, "sid": B_SCREEN, "uid": invited_b, "role_id": role_b, "prefix": B_PREFIX, "org_id": str(B),
-          "family_id": B_FAMILY, "user_id": user_b, "key": "professional", "address": "TZebraAddress000000000000000000001"}
+          "family_id": B_FAMILY, "user_id": user_b, "key": "professional", "approval_id": str(uuid.uuid4()), "address": "TZebraAddress000000000000000000001"}
 BODIES = {
     ("POST", "/cases/{alert_id}/decision"): {"decision": "false_positive", "reason": "isolation check"},
     ("POST", "/cases/{alert_id}/assign"): {"user_id": user_b},
@@ -107,6 +108,10 @@ BODIES = {
     ("PUT", "/cases/{alert_id}/restricted"): {"restricted": True, "reason": "isolation check"},
     ("POST", "/cases/{alert_id}/access"): {"user_id": user_b},
     ("PUT", "/platform/orgs/{org_id}/plan"): {"plan": "starter"},
+    ("POST", "/platform/orgs/{org_id}/status"): {"status": "suspended", "reason": "isolation check"},
+    ("POST", "/platform/orgs/{org_id}/delete"): {"reason": "isolation check"},
+    ("POST", "/platform/orgs/{org_id}/admin"): {"email": "intruder@iso.example.com", "reason": "isolation check"},
+    ("POST", "/platform/approvals/{approval_id}/deny"): {"reason": "isolation check"},
     ("PUT", "/platform/orgs/{org_id}/features"): {"features": []},
 }
 QUERIES = {("GET", "/cases/{alert_id}/export"): {"reason": "isolation check"}, ("GET", "/search"): {"q": "C-ZEBRA-77", "reason": "isolation check"},

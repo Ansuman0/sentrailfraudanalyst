@@ -136,6 +136,8 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
         status, sv, role_id, mfa_enabled, idp = u
+        cur.execute("SELECT mfa_mandatory FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
+        mandatory = bool((cur.fetchone() or [False])[0])
         if c.get("sid"):
             cur.execute("SELECT 1 FROM refresh_tokens WHERE family_id=%s AND revoked_at IS NULL LIMIT 1", (c["sid"],))
             if not cur.fetchone():       # signed out, switched away from, or revoked: the access token dies with its session
@@ -179,6 +181,8 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             allow, org_requires = (r[0], r[1]) if r else ([], False)
     if allow and (ip is None or not any(ipaddress.ip_address(ip) in ipaddress.ip_network(str(n)) for n in allow)):
         raise HTTPException(403, "Access isn't allowed from this network")
+    if mandatory:
+        org_requires = True       # accepted an invitation as Tenant admin: two-factor is not optional for them
     if not c["org"] and row[2] != "Platform owner":
         org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
     perms, alias_names = catalogue.expand_aliases(set(row[3]))
