@@ -18,6 +18,7 @@ from app import config, pg
 from app.security import crypto, passwords, mfa, passkeys, tokens, audit
 from app.security.rbac import Principal, require, require_any, current_user, signed_in_user, client_ip
 from app.security.middleware import limiter
+from app.access import catalogue
 from app.access.catalogue import TENANT_ADMIN
 from app.services import mailer, notify
 from app.security import oidc
@@ -1118,8 +1119,35 @@ def list_roles(p: Principal = Depends(require("roles.manage"))):
 
 
 def _sod_warnings(roles):
-    return [f"{r['name']} can both manage users and decide cases. One person could create an account and approve their own work."
-            for r in roles if not r.get("locked") and "users.manage" in r["perms"] and ({"cases.decide", "str.approve"} & set(r["perms"]))]
+    """Separation-of-duties warnings (catalogue.SOD_CONFLICTS), one sentence per conflict, for every role that isn't locked."""
+    out = []
+    for r in roles:
+        if r.get("locked"):
+            continue
+        held = set(r["perms"])
+        out += [f"{r['name']} can both {_say(a)} and {_say(b)}. {why}" for a, b, why in catalogue.SOD_CONFLICTS if a in held and b in held]
+    return out
+
+
+def _say(perm: str) -> str:
+    return {p.key: p.description[0].lower() + p.description[1:] for p in catalogue.PERMISSIONS}.get(perm, perm)
+
+
+def _effective(cur, org, role_id) -> dict:
+    """What a role can do: each permission with its wording and whether it asks for a fresh second factor, plus the plan features switched on."""
+    cur.execute("SELECT name, is_locked FROM roles WHERE id=%s AND org_id=%s", (role_id, org))
+    role = cur.fetchone()
+    if not role:
+        raise HTTPException(404, "Role not found")
+    cur.execute("SELECT perm FROM role_permissions WHERE role_id=%s", (role_id,))
+    held = {r[0] for r in cur.fetchall()}
+    meta = {p.key: p for p in catalogue.PERMISSIONS}
+    cur.execute("SELECT feature FROM org_features WHERE in_plan AND enabled ORDER BY feature")
+    return {"role": role[0], "locked": role[1],
+            "permissions": [{"key": k, "group": meta[k].group, "description": meta[k].description, "step_up": meta[k].step_up}
+                            for k in sorted(held) if k in meta],
+            "features": [r[0] for r in cur.fetchall()],
+            "warnings": [] if role[1] else _sod_warnings([{"name": role[0], "perms": sorted(held), "locked": False}])}
 
 
 class RoleIn(BaseModel):
@@ -1144,6 +1172,24 @@ def _write_perms(cur, p, role_id, perms):
         cur.execute("INSERT INTO role_permissions VALUES (%s,%s)", (role_id, perm))
 
 
+@router.get("/admin/roles/{role_id}/effective")
+def role_effective(role_id: uuid.UUID, p: Principal = Depends(require("roles.manage"))):
+    """What this role can do (also drives 'Preview as role' in the web app: the screens that role would see)."""
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+        return _effective(cur, p.org_id, role_id)
+
+
+@router.get("/admin/users/{uid}/effective-permissions")
+def user_effective(uid: uuid.UUID, p: Principal = Depends(require("users.manage"))):
+    """What this person can do in this tenant, and through which role."""
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+        cur.execute("SELECT role_id FROM tenant_memberships WHERE user_id=%s AND tenant_id=%s", (uid, p.org_id))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(404, "User not found")
+        return _effective(cur, p.org_id, r[0])
+
+
 @router.post("/admin/roles")
 def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
@@ -1153,7 +1199,7 @@ def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
             raise HTTPException(409, "A role with this name already exists")
         _write_perms(cur, p, r[0], body.perms)
         _audit(cur, p, "role_created", body.name, {"perms": body.perms})
-    return {"id": str(r[0])}
+    return {"id": str(r[0]), "warnings": _sod_warnings([{"name": body.name, "perms": body.perms}])}
 
 
 @router.put("/admin/roles/{role_id}")
@@ -1172,7 +1218,7 @@ def update_role(role_id: uuid.UUID, body: RoleIn, p: Principal = Depends(require
         cur.execute("UPDATE users SET session_version=session_version+1 WHERE role_id=%s", (role_id,))  # apply now
         _audit(cur, p, "role_permissions_changed", name, {"added": sorted(set(body.perms) - set(before)),
                                                           "removed": sorted(set(before) - set(body.perms))})
-    return {"ok": True}
+    return {"ok": True, "warnings": _sod_warnings([{"name": name, "perms": body.perms}])}
 
 
 # =====================================================================
@@ -1434,7 +1480,8 @@ def me(p: Principal = Depends(signed_in_user)):
             "tenant": tenant, "permissions": sorted(p.perms), "features": sorted(p.features),
             # mfa_setup: "required" (the organization insists), "optional" (turn it on from My account), or None (it's on)
             "mfa_enabled": p.mfa_setup is None, "mfa_setup": p.mfa_setup, "session_mfa": p.mfa,
-            "scope": p.scope, "selecting": False, "tenants": tenants, "step_up_fresh": p.mfa_fresh()}
+            "scope": p.scope, "selecting": False, "tenants": tenants, "step_up_fresh": p.mfa_fresh(),
+            "teams_enabled": config.teams_enabled()}
 
 
 @router.get("/me/tenants")

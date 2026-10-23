@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Empty, ErrorBox, Loading, PageHeader } from "../components/common";
 import { useAuth } from "../hooks/useAuth";
-import { admin } from "../services/sentrail";
+import { admin, governance } from "../services/sentrail";
 import type { AdminUser } from "../types/api";
 import { fmtDateTime } from "../utils/format";
 
@@ -41,6 +41,9 @@ export function Users() {
     if (pending) sensitive.mutate({ kind: pending.kind, id: pending.user.id, reason: reason.trim() });
   };
 
+  const [viewing, setViewing] = useState<AdminUser | null>(null);
+  const effective = useQuery({ queryKey: ["effective", viewing?.id], queryFn: () => governance.effectiveForUser(viewing!.id), enabled: !!viewing });
+
   const row = (u: AdminUser) => {
     const self = u.id === me?.user_id;
     const current = roleList.find((r) => r.name === u.role);
@@ -60,6 +63,7 @@ export function Users() {
         <td>{u.mfa ? "On" : "Off"}</td>
         <td>{fmtDateTime(u.last_login)}</td>
         <td>
+          {!self && <button className="btn" onClick={() => setViewing(viewing?.id === u.id ? null : u)}>Permissions</button>}{" "}
           {!self && can("users.pii.reveal") && <button className="btn" onClick={() => open("reveal", u)}>Reveal email</button>}{" "}
           {!self && u.mfa && <button className="btn" onClick={() => open("reset", u)}>Reset two-factor</button>}{" "}
           {!self && u.status === "active" && (
@@ -125,6 +129,23 @@ export function Users() {
             {!sensitive.isSuccess && <button className="btn primary" disabled={sensitive.isPending || reason.trim().length < 5}>{sensitive.isPending ? "Working…" : pending.kind === "reveal" ? "Reveal" : "Reset two-factor"}</button>}
           </div>
         </form>
+      )}
+      {viewing && (
+        <section className="panel narrow" aria-label={`Effective permissions of ${viewing.name ?? viewing.email}`}>
+          <b>What {viewing.name ?? viewing.email} can do</b>
+          {effective.isPending ? <Loading /> : effective.isError ? <ErrorBox error={effective.error} /> : (
+            <>
+              <p className="muted">Through the {effective.data.role} role{effective.data.locked ? " (locked: always every permission)" : ""}. Plan features on: {effective.data.features.join(", ") || "none"}.</p>
+              <ul>
+                {effective.data.permissions.map((p) => (
+                  <li key={p.key}>{p.description}{p.step_up && <span className="muted"> · asks for a fresh second factor</span>}</li>
+                ))}
+              </ul>
+              {effective.data.warnings.map((w) => <div key={w} className="alertbox" role="note">{w}</div>)}
+            </>
+          )}
+          <div className="actions"><button className="btn" onClick={() => setViewing(null)}>Close</button></div>
+        </section>
       )}
       {update.isError && <ErrorBox error={update.error} title="That change wasn't made" />}
       <h2>People</h2>

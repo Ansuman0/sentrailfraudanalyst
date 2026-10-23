@@ -117,6 +117,8 @@ export interface RequestOptions {
   withCookies?: boolean;
   /** Retry once after refreshing on 401 (off for the sign-in calls themselves). */
   retryOn401?: boolean;
+  /** Return the body as text instead of JSON (a file download). */
+  asText?: boolean;
 }
 
 function buildUrl(path: string, query?: Query) {
@@ -146,7 +148,7 @@ async function isStepUpRequired(r: Response): Promise<boolean> {
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, query, withCookies = false, retryOn401 = true } = opts;
+  const { method = "GET", body, query, withCookies = false, retryOn401 = true, asText = false } = opts;
   const ids = correlationHeaders();            // same ids on the 401 retry: it is the same user action
   const send = () => {
     const headers: Record<string, string> = { ...ids };
@@ -188,6 +190,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     throw new ApiError(r.status, errorMessage(detail, `Request failed (${r.status})`), detail);
   }
   if (r.status === 204) return undefined as T;
+  if (asText) return (await r.text()) as T;
   return (await r.json()) as T;
 }
 

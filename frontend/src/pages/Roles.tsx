@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ErrorBox, Loading, PageHeader } from "../components/common";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { admin } from "../services/sentrail";
 import type { RoleSummary } from "../types/api";
@@ -29,6 +30,9 @@ function PermissionPicker({ value, onChange, disabled }: { value: string[]; onCh
 
 function RoleEditor({ role, isOwn }: { role: RoleSummary; isOwn: boolean }) {
   const qc = useQueryClient();
+  const { startPreview } = useAuth();
+  const navigate = useNavigate();
+  const preview = useMutation({ mutationFn: () => startPreview(role.id), onSuccess: () => navigate("/") });
   const [name, setName] = useState(role.name);
   const [perms, setPerms] = useState<string[]>(role.perms);
   const save = useMutation({
@@ -49,6 +53,9 @@ function RoleEditor({ role, isOwn }: { role: RoleSummary; isOwn: boolean }) {
       {isOwn && !role.locked && <p className="muted">This is your own role. Another admin has to change it.</p>}
       {save.isError && <ErrorBox error={save.error} />}
       {save.isSuccess && <p className="verified">Saved. People with this role get the change on their next request.</p>}
+      {save.data?.warnings?.map((w) => <div key={w} className="alertbox" role="note">{w}</div>)}
+      {preview.isError && <ErrorBox error={preview.error} />}
+      <div className="actions"><button type="button" className="btn" disabled={preview.isPending} onClick={() => preview.mutate()}>Preview as {role.name}</button></div>
       {!isOwn && !role.locked && <div className="actions"><button className="btn primary" disabled={!changed || save.isPending}>{save.isPending ? "Saving…" : "Save role"}</button></div>}
     </form>
   );

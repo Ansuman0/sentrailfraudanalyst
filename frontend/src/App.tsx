@@ -4,6 +4,7 @@ import { RequireAuth, RequirePerm } from "./components/RequireAuth";
 import { StepUpProvider } from "./components/StepUp";
 import { useAuth } from "./hooks/useAuth";
 import { Account } from "./pages/Account";
+import { AccessReviews, StaffAccessReview } from "./pages/AccessReviews";
 import { Alerts } from "./pages/Alerts";
 import { ApiKeys } from "./pages/ApiKeys";
 import { Audit } from "./pages/Audit";
@@ -12,6 +13,9 @@ import { CaseView } from "./pages/CaseView";
 import { Features } from "./pages/Features";
 import { Join } from "./pages/Join";
 import { Organizations } from "./pages/Organizations";
+import { OwnerAccess } from "./pages/OwnerAccess";
+import { AccessSessions, Approvals, Staff } from "./pages/PlatformTeam";
+import { Teams } from "./pages/Teams";
 import { Plans } from "./pages/Plans";
 import { PlatformSecurity } from "./pages/PlatformSecurity";
 import { Policy } from "./pages/Policy";
@@ -36,7 +40,7 @@ function Home() {
 }
 
 export function App() {
-  const { can, canAny, hasFeature } = useAuth();
+  const { can, canAny, hasFeature, me } = useAuth();
   return (
     <StepUpProvider>
     <Routes>
@@ -64,6 +68,13 @@ export function App() {
         <Route path="organizations" element={<RequirePerm allowed={canAny("platform.tenants.manage", "platform.support")}><Organizations /></RequirePerm>} />
         <Route path="platform-security" element={<RequirePerm allowed={can("platform.security.manage")}><PlatformSecurity /></RequirePerm>} />
         <Route path="plans" element={<RequirePerm allowed={canAny("platform.plans.manage", "platform.tenants.manage")}><Plans /></RequirePerm>} />
+        <Route path="access-reviews" element={<RequirePerm allowed={can("access.review")}><AccessReviews /></RequirePerm>} />
+        <Route path="owner-access" element={<RequirePerm allowed={can("security.manage")}><OwnerAccess /></RequirePerm>} />
+        <Route path="teams" element={<RequirePerm allowed={can("teams.manage") && !!me?.teams_enabled}><Teams /></RequirePerm>} />
+        <Route path="staff" element={<RequirePerm allowed={can("platform.users.manage")}><Staff /></RequirePerm>} />
+        <Route path="approvals" element={<RequirePerm allowed={canAny("platform.owners.manage", "platform.security.manage", "platform.tenants.delete", "platform.tenants.manage")}><Approvals /></RequirePerm>} />
+        <Route path="access-sessions" element={<RequirePerm allowed={canAny("platform.tenant.access", "platform.audit.view")}><AccessSessions /></RequirePerm>} />
+        <Route path="staff-reviews" element={<RequirePerm allowed={can("platform.owners.manage")}><StaffAccessReview /></RequirePerm>} />
         <Route path="account" element={<Account />} />
         <Route path="*" element={<><h1>Page not found</h1><p className="sub">That address doesn't match any screen.</p></>} />
       </Route>

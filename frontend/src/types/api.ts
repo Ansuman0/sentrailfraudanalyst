@@ -37,6 +37,8 @@ export interface Me {
   must_enroll_passkey?: boolean;
   /** Where this person can work (access model v2). The header offers a switcher when there is more than one. */
   tenants?: TenantChoice[];
+  /** Teams and queues are switched on for this deployment. */
+  teams_enabled?: boolean;
 }
 
 export interface TenantChoice {
@@ -67,6 +69,8 @@ export interface Alert {
   screening_id: string | null;
   /** Need-to-know case: visible only to people with cases.restricted.view or named on the case. */
   restricted?: boolean;
+  /** The team queue this alert sits in (teams are optional). */
+  team_id?: string | null;
 }
 
 export interface Screening {
@@ -233,6 +237,9 @@ export interface ApiKey {
   created_at: string;
   revoked_at: string | null;
   active: boolean;
+  expires_at?: string | null;
+  last_used_at?: string | null;
+  rate_limit_per_min?: number;
 }
 
 export interface SecuritySettings {
@@ -242,6 +249,12 @@ export interface SecuritySettings {
   min_password_len: number;
   ip_allowlist: string[];
   retention_years: number;
+  dormant_days: number;
+  access_review_days: number;
+  export_limit_per_hour: number;
+  anomaly_searches_per_hour: number;
+  anomaly_exports_per_hour: number;
+  alert_new_country: boolean;
   encryption: { algorithm: string; current_key: string; key_manager: string };
 }
 
@@ -250,4 +263,101 @@ export interface Passkey {
   name: string;
   created_at: string;
   last_used_at: string | null;
+}
+
+// ---- phase 8: governance and administration screens ----
+export interface ReviewSummary {
+  id: string;
+  title: string;
+  status: "open" | "signed_off" | "cancelled";
+  opened_at: string;
+  due_at: string;
+  signed_off_at: string | null;
+  signed_off_by: string | null;
+  overdue: boolean;
+  items?: number;
+  decided?: number;
+}
+
+export interface ReviewMember {
+  user_id: string;
+  name: string | null;
+  email: string | null;
+  role: string;
+  decision: "keep" | "change" | "remove" | null;
+  new_role_id: string | null;
+  note: string | null;
+  decided_at: string | null;
+}
+
+export interface ReviewDetail extends ReviewSummary {
+  members: ReviewMember[];
+}
+
+export interface AccessRequest {
+  id: string;
+  tenant_id: string;
+  tenant: string;
+  owner_user_id: string;
+  reason: string;
+  status: "requested" | "approved" | "active" | "ended" | "denied";
+  requested_at: string;
+  started_at: string | null;
+  expires_at: string | null;
+  extended: boolean;
+  ended_at: string | null;
+  ended_reason: string | null;
+  legal_hold: boolean;
+  request_expires_at: string | null;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  members: number;
+  open_alerts: number;
+}
+
+export interface TeamDetail {
+  id: string;
+  name: string;
+  members: { user_id: string; name: string | null; email: string | null }[];
+}
+
+export interface StaffUser {
+  id: string;
+  name: string | null;
+  email: string;
+  role: string;
+  status: string;
+  sign_in: string;
+  last_login: string | null;
+}
+
+export interface Approval {
+  id: string;
+  action: string;
+  payload: Record<string, unknown>;
+  requested_by: string;
+  approved_by: string | null;
+  status: "pending" | "approved" | "denied" | "expired";
+  reason: string | null;
+  created_at: string;
+  decided_at: string | null;
+  expires_at: string;
+}
+
+export interface Effective {
+  role: string;
+  locked: boolean;
+  permissions: { key: string; group: string; description: string; step_up: boolean }[];
+  features: string[];
+  warnings: string[];
+}
+
+export interface DownloadLink {
+  download_path: string;
+  expires_at: string;
+  filename: string;
+  note: string;
 }

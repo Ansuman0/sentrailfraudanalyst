@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { BandBadge, Empty, ErrorBox, Loading, PageHeader, Score } from "../components/common";
-import { cases } from "../services/sentrail";
+import { useAuth } from "../hooks/useAuth";
+import { cases, teamsApi } from "../services/sentrail";
 import type { AlertStatus, Band } from "../types/api";
 import { fmtDateTime, humanize } from "../utils/format";
 
@@ -14,14 +15,17 @@ export function Alerts() {
   const bandParam = params.get("band");
   const band = (BANDS.includes(bandParam as Band) ? bandParam : "all") as Band | "all";
   const navigate = useNavigate();
+  const { me } = useAuth();
+  const mine = useQuery({ queryKey: ["my-teams"], queryFn: teamsApi.mine, enabled: !!me?.teams_enabled });
+  const team = params.get("team") ?? "";
   const q = useQuery({
-    queryKey: ["alerts", status, band],
-    queryFn: () => cases.alerts(status, band === "all" ? undefined : band),
+    queryKey: ["alerts", status, band, team],
+    queryFn: () => cases.alerts(status, band === "all" ? undefined : band, team || undefined),
   });
 
   const set = (k: string, v: string) => {
     const next = new URLSearchParams(params);
-    next.set(k, v);
+    if (v) next.set(k, v); else next.delete(k);
     setParams(next, { replace: true });
   };
 
@@ -42,6 +46,14 @@ export function Alerts() {
           </button>
         ))}
       </div>
+      {me?.teams_enabled && (mine.data?.teams.length ?? 0) > 0 && (
+        <div className="chips" role="group" aria-label="Queue">
+          <button className="chip" aria-pressed={!team} onClick={() => set("team", "")}>All alerts</button>
+          {mine.data?.teams.map((t) => (
+            <button key={t.id} className="chip" aria-pressed={team === t.id} onClick={() => set("team", t.id)}>{t.name} ({t.open_alerts})</button>
+          ))}
+        </div>
+      )}
       {q.isPending ? (
         <Loading />
       ) : q.isError ? (

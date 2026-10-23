@@ -12,6 +12,11 @@ IS_DEV = ENV == "dev"
 # both paths must pass the full suite while it exists. Read at request time through config, so tests can switch it.
 ACCESS_MODEL_V2 = os.getenv("ACCESS_MODEL_V2", "false").lower() == "true"
 
+# Teams and queues (optional): tenant-defined teams, alerts assignable to a team queue. Off by default; read at request time.
+def teams_enabled() -> bool:
+    return os.getenv("TEAMS", "false").lower() == "true"
+
+
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "")
 TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")

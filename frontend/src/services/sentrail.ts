@@ -1,7 +1,7 @@
 /** Every Sentrail API call the app makes, in one place. Components use these through React Query hooks. */
 import { request } from "./http";
 import type {
-  AdminUser, Alert, AlertStatus, ApiKey, AuditEvent, Band, CaseDetail, Investigation, LoginResponse, Me, Organization, Policy,
+  AccessRequest, AdminUser, Alert, Approval, DownloadLink, Effective, ReviewDetail, ReviewSummary, StaffUser, Team, TeamDetail, AlertStatus, ApiKey, AuditEvent, Band, CaseDetail, Investigation, LoginResponse, Me, Organization, Policy,
   Passkey, Plan, PlatformSecurity, RoleSummary, SearchResult, SecuritySettings, Session, TenantChoice, TokenResponse, TraceResult,
 } from "../types/api";
 
@@ -76,7 +76,9 @@ export const me = {
 
 // ---- cases ----
 export const cases = {
-  alerts: (status: AlertStatus, band?: Band) => request<Alert[]>("/alerts", { query: { status, band } }),
+  alerts: (status: AlertStatus, band?: Band, team?: string) => request<Alert[]>("/alerts", { query: { status, band, team } }),
+  setTeam: (id: string, team_id: string | null) =>
+    request<{ team_id: string | null }>(`/cases/${encodeURIComponent(id)}/team`, { method: "PUT", body: { team_id } }),
   get: (id: string) => request<CaseDetail>(`/cases/${encodeURIComponent(id)}`),
   decide: (id: string, decision: "false_positive" | "request_info" | "escalate", reason: string) =>
     request<{ status: AlertStatus }>(`/cases/${encodeURIComponent(id)}/decision`, { method: "POST", body: { decision, reason } }),
@@ -123,6 +125,12 @@ export interface SecurityPatch {
   min_password_len?: number;
   retention_years?: number;
   ip_allowlist?: string[];
+  dormant_days?: number;
+  access_review_days?: number;
+  export_limit_per_hour?: number;
+  anomaly_searches_per_hour?: number;
+  anomaly_exports_per_hour?: number;
+  alert_new_country?: boolean;
 }
 
 // ---- organization administration ----
@@ -143,17 +151,90 @@ export const admin = {
     }),
   verifySso: () => request<{ verified: string }>("/admin/sso/verify", { method: "POST" }),
   createRole: (name: string, perms: string[]) =>
-    request<{ id: string }>("/admin/roles", { method: "POST", body: { name, perms } }),
+    request<{ id: string; warnings?: string[] }>("/admin/roles", { method: "POST", body: { name, perms } }),
   updateRole: (id: string, name: string, perms: string[]) =>
-    request<{ ok: boolean }>(`/admin/roles/${encodeURIComponent(id)}`, { method: "PUT", body: { name, perms } }),
+    request<{ ok: boolean; warnings?: string[] }>(`/admin/roles/${encodeURIComponent(id)}`, { method: "PUT", body: { name, perms } }),
   invite: (email: string, role_id: string) =>
     request<{ invited: string; dev_link?: string }>("/admin/invitations", { method: "POST", body: { email, role_id } }),
   updateUser: (id: string, patch: { role_id?: string; status?: "active" | "suspended" }) =>
     request<{ ok: boolean }>(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   apiKeys: () => request<ApiKey[]>("/admin/api-keys"),
-  createApiKey: (label: string) =>
-    request<{ api_key: string; prefix: string; message: string }>("/admin/api-keys", { method: "POST", body: label ? { label } : {} }),
+  createApiKey: (label: string, opts: { expires_in_days?: number; rate_limit_per_min?: number } = {}) =>
+    request<{ api_key: string; prefix: string; message: string }>("/admin/api-keys", { method: "POST", body: { ...(label ? { label } : {}), ...opts } }),
+  rotateApiKey: (prefix: string) =>
+    request<{ api_key: string; prefix: string; old_key_expires_at: string; message: string }>(`/admin/api-keys/${encodeURIComponent(prefix)}/rotate`, { method: "POST" }),
   revokeApiKey: (prefix: string) => request<{ revoked: string }>(`/admin/api-keys/${encodeURIComponent(prefix)}`, { method: "DELETE" }),
   security: () => request<SecuritySettings>("/admin/security"),
   setSecurity: (patch: SecurityPatch) => request<{ ok: boolean }>("/admin/security", { method: "PUT", body: patch }),
+};
+
+// ---- phase 8: effective permissions, reviews, owner access, teams, staff, approvals, exports ----
+export const governance = {
+  effectiveForUser: (id: string) => request<Effective>(`/admin/users/${encodeURIComponent(id)}/effective-permissions`),
+  effectiveForRole: (id: string) => request<Effective>(`/admin/roles/${encodeURIComponent(id)}/effective`),
+  /** `scope` "tenant" reviews the organization's people, "platform" the platform's own staff. */
+  reviews: (scope: "tenant" | "platform") => {
+    const base = scope === "tenant" ? "/admin/access-reviews" : "/platform/access-reviews";
+    return {
+      list: () => request<ReviewSummary[]>(base),
+      open: (title?: string) => request<{ id: string; items: number }>(base, { method: "POST", body: title ? { title } : {} }),
+      get: (id: string) => request<ReviewDetail>(`${base}/${encodeURIComponent(id)}`),
+      decide: (id: string, uid: string, body: { decision: "keep" | "change" | "remove"; new_role_id?: string; note?: string }) =>
+        request<{ decision: string }>(`${base}/${encodeURIComponent(id)}/members/${encodeURIComponent(uid)}`, { method: "PUT", body }),
+      signOff: (id: string) => request<{ status: string; keep: number; change: number; remove: number }>(`${base}/${encodeURIComponent(id)}/sign-off`, { method: "POST" }),
+    };
+  },
+  exportAudit: (format: "json" | "csv") => request<DownloadLink>("/admin/audit/export", { method: "POST", body: { format } }),
+  exportData: () => request<DownloadLink>("/admin/data-export", { method: "POST" }),
+  /** Fetch a one-time download link while signed in; the file text comes back once. */
+  download: (path: string) => request<string>(path, { asText: true }),
+};
+
+export const ownerAccess = {
+  /** The organization's side: who asked to enter, and who is inside. */
+  requests: () => request<AccessRequest[]>("/admin/access-requests"),
+  approve: (id: string) => request<{ status: string }>(`/admin/access-requests/${encodeURIComponent(id)}/approve`, { method: "POST" }),
+  deny: (id: string, reason: string) => request<{ status: string }>(`/admin/access-requests/${encodeURIComponent(id)}/deny`, { method: "POST", body: { reason } }),
+  endForTenant: (id: string) => request<{ ended: string }>(`/admin/access-requests/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** The platform's side. */
+  sessions: () => request<AccessRequest[]>("/platform/access"),
+  request: (orgId: string, reason: string) =>
+    request<{ session_id: string; status: string }>(`/platform/orgs/${encodeURIComponent(orgId)}/access`, { method: "POST", body: { reason } }),
+  extend: (id: string) => request<{ until: string }>(`/platform/access/${encodeURIComponent(id)}/extend`, { method: "POST" }),
+  end: (id: string) => request<{ ended: string }>(`/platform/access/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
+export const teamsApi = {
+  list: () => request<Team[]>("/admin/teams"),
+  create: (name: string) => request<{ id: string }>("/admin/teams", { method: "POST", body: { name } }),
+  rename: (id: string, name: string) => request<{ ok: boolean }>(`/admin/teams/${encodeURIComponent(id)}`, { method: "PUT", body: { name } }),
+  remove: (id: string) => request<{ deleted: string }>(`/admin/teams/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  get: (id: string) => request<TeamDetail>(`/admin/teams/${encodeURIComponent(id)}`),
+  setMembers: (id: string, user_ids: string[]) =>
+    request<{ members: number }>(`/admin/teams/${encodeURIComponent(id)}/members`, { method: "PUT", body: { user_ids } }),
+  mine: () => request<{ teams: { id: string; name: string; open_alerts: number }[] }>("/me/teams"),
+};
+
+export const staff = {
+  users: () => request<StaffUser[]>("/platform/users"),
+  roles: () => request<{ roles: { id: string; name: string; system: boolean; perms: string[] }[] }>("/platform/roles"),
+  invite: (email: string, role_id: string) =>
+    request<{ invited: string; dev_link?: string }>("/platform/invitations", { method: "POST", body: { email, role_id } }),
+  update: (id: string, patch: { role_id?: string; status?: "active" | "suspended" }) =>
+    request<{ ok?: boolean; approval_id?: string; status?: string }>(`/platform/users/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+};
+
+export const approvals = {
+  list: () => request<Approval[]>("/platform/approvals"),
+  approve: (id: string) => request<{ status: string }>(`/platform/approvals/${encodeURIComponent(id)}/approve`, { method: "POST" }),
+  deny: (id: string, reason: string) => request<{ status: string }>(`/platform/approvals/${encodeURIComponent(id)}/deny`, { method: "POST", body: { reason } }),
+};
+
+export const tenantAdmin = {
+  create: (b: { legal_name: string; business_type: string; registration: string; admin_email: string; plan: string }) =>
+    request<{ id: string; status: string; dev_link?: string }>("/platform/orgs", { method: "POST", body: b }),
+  setStatus: (id: string, status: "active" | "suspended", reason: string) =>
+    request<{ status: string }>(`/platform/orgs/${encodeURIComponent(id)}/status`, { method: "POST", body: { status, reason } }),
+  requestDelete: (id: string, reason: string) =>
+    request<{ approval_id: string }>(`/platform/orgs/${encodeURIComponent(id)}/delete`, { method: "POST", body: { reason } }),
 };

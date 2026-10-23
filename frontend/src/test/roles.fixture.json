@@ -1,0 +1,86 @@
+{
+  "Platform owner": {
+    "scope": "platform",
+    "permissions": [
+      "platform.audit.view",
+      "platform.owners.manage",
+      "platform.plans.manage",
+      "platform.roles.manage",
+      "platform.security.manage",
+      "platform.support",
+      "platform.tenant.access",
+      "platform.tenants.delete",
+      "platform.tenants.manage",
+      "platform.users.manage"
+    ]
+  },
+  "Platform support": {
+    "scope": "platform",
+    "permissions": [
+      "platform.support"
+    ]
+  },
+  "Platform auditor": {
+    "scope": "platform",
+    "permissions": [
+      "platform.audit.view"
+    ]
+  },
+  "Tenant admin": {
+    "scope": "tenant",
+    "permissions": [
+      "access.review",
+      "apikeys.manage",
+      "audit.export",
+      "audit.view",
+      "cases.decide",
+      "cases.restricted.view",
+      "cases.view",
+      "data.export",
+      "features.manage",
+      "policy.edit",
+      "roles.manage",
+      "screening.override",
+      "security.manage",
+      "str.approve",
+      "str.draft",
+      "teams.manage",
+      "users.manage",
+      "users.pii.reveal",
+      "wallet.trace"
+    ]
+  },
+  "Compliance officer": {
+    "scope": "tenant",
+    "permissions": [
+      "audit.view",
+      "cases.decide",
+      "cases.restricted.view",
+      "cases.view",
+      "data.export",
+      "policy.edit",
+      "screening.override",
+      "str.approve",
+      "str.draft",
+      "teams.manage",
+      "wallet.trace"
+    ]
+  },
+  "Compliance analyst": {
+    "scope": "tenant",
+    "permissions": [
+      "cases.decide",
+      "cases.view",
+      "str.draft",
+      "wallet.trace"
+    ]
+  },
+  "Auditor (read-only)": {
+    "scope": "tenant",
+    "permissions": [
+      "audit.export",
+      "audit.view",
+      "cases.view"
+    ]
+  }
+}

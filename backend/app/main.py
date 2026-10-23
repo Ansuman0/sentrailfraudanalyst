@@ -22,7 +22,7 @@ from app.owner_access import router as access_router
 from app.passkey_api import router as passkey_router
 from app.governance import router as governance_router
 from app.scim_api import router as scim_router, ScimError, scim_error_response
-from app import governance
+from app import governance, teams_api
 from app.logging_config import configure_logging
 
 app = FastAPI(title="Sentrail", version="0.3",
@@ -39,6 +39,7 @@ app.include_router(access_router)
 app.include_router(passkey_router)
 app.include_router(governance_router)
 app.include_router(scim_router)
+app.include_router(teams_api.router)
 app.add_exception_handler(ScimError, scim_error_response)
 install_handlers(app)
 configure_logging()
@@ -85,8 +86,15 @@ def _case_detail(p: Principal, alert: dict) -> tuple[dict, dict]:
 @app.get("/alerts")
 def list_alerts(band: str | None = Query(None, pattern="^(high|medium|low)$"),
                 status: str = Query("open", pattern="^(open|pending_info|escalated|closed|awaiting_approval|str_filed)$"),
+                team: uuid.UUID | None = Query(None),
                 p: Principal = Depends(require("cases.view", feature="alerts"))):
-    return db.list_alerts(p, band, status)
+    if team is not None:                                   # a team's queue: for its members (and team admins) only, and only what they may see anyway
+        if not config.teams_enabled():
+            raise HTTPException(404, "Teams aren't turned on")
+        with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+            if not teams_api.may_view_queue(cur, p, team):
+                raise HTTPException(403, "That queue is for members of the team")
+    return db.list_alerts(p, band, status, str(team) if team else None)
 
 
 @app.get("/cases/{alert_id}")

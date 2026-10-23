@@ -143,7 +143,7 @@ listed = {r["name"]: r for r in c.get("/admin/roles", headers=K).json()["roles"]
 ok(listed[cat.TENANT_ADMIN]["locked"] and len(listed[cat.TENANT_ADMIN]["perms"]) == 19, "the roles list marks it locked with all 19 permissions")
 warn = c.get("/admin/roles", headers=K).json()["warnings"]
 ok(not any(cat.TENANT_ADMIN in w for w in warn), "the locked Tenant admin does not trigger the separation-of-duties warning")
-ok(any("Role keeper" in w for w in warn) is False, "a custom role with users.manage but no case permissions does not either")
+ok(any(w.startswith("Role keeper") and "any access" in w for w in warn), "a custom role that manages both roles and users warns (it could grant anyone any access); one with users.manage and no case permissions would not")
 risky = c.post("/admin/roles", headers=K, json={"name": "Risky", "perms": ["users.manage", "cases.decide"]})
 warn = c.get("/admin/roles", headers=K).json()["warnings"]
 ok(any(w.startswith("Risky") for w in warn), "a custom role combining user admin with case decisions still triggers the warning")

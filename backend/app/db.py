@@ -41,13 +41,15 @@ def save_alert(org_id, a: dict):
                      a["channel"], a.get("status", "open"), a.get("screening_id")))
 
 
-ALERT_COLS = ["id", "customer_id", "score", "band", "reasons", "channel", "status", "created_at", "assigned_to", "screening_id", "restricted"]
+ALERT_COLS = ["id", "customer_id", "score", "band", "reasons", "channel", "status", "created_at", "assigned_to", "screening_id", "restricted", "team_id"]
 
 
-def list_alerts(p, band=None, status="open"):
+def list_alerts(p, band=None, status="open", team=None):
     q, args = f"SELECT {', '.join(ALERT_COLS)} FROM alerts WHERE status=%s", [status]
     if band:
         q += " AND band=%s"; args.append(band)
+    if team:
+        q += " AND team_id=%s"; args.append(team)
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(q + " ORDER BY score DESC LIMIT 500", args)
         return [_alert(r) for r in cur.fetchall()]
@@ -56,6 +58,7 @@ def list_alerts(p, band=None, status="open"):
 def _alert(r) -> dict:
     a = dict(zip(ALERT_COLS, r))
     a["assigned_to"] = str(a["assigned_to"]) if a["assigned_to"] else None
+    a["team_id"] = str(a["team_id"]) if a["team_id"] else None
     return a
 
 

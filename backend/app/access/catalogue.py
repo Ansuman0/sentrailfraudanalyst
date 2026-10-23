@@ -31,6 +31,19 @@ class Perm:
     step_up: bool = False
 
 
+# Pairs of permissions one role should not hold together (separation of duties). Shown as warnings on the roles screen; never blocking,
+# because a small team may have a reason. The locked Tenant admin role is exempt (it holds everything by design).
+SOD_CONFLICTS: list[tuple[str, str, str]] = [
+    ("users.manage", "cases.decide", "One person could create an account and approve their own work."),
+    ("users.manage", "str.approve", "One person could create an account and approve their own work."),
+    ("str.draft", "str.approve", "One person could write a report and approve it (the system still blocks approving your own draft)."),
+    ("roles.manage", "users.manage", "One person could give themselves or a colleague any access."),
+    ("policy.edit", "screening.override", "One person could loosen the rules and then release the transfers they held back."),
+    ("apikeys.manage", "screening.override", "One person could issue the key that screens transfers and also override its holds."),
+    ("audit.export", "users.manage", "One person could change who has access and also take the evidence out."),
+]
+
+
 PERMISSIONS: list[Perm] = [
     # ---- Tenant permissions (section 3.3) ----
     Perm("cases.view", TENANT, "Customer data", "Alert queue, case detail, screenings, search, current policy"),

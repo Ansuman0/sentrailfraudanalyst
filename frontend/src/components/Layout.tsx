@@ -11,7 +11,7 @@ interface NavItem {
 
 /** Navigation only hides what a role can't use. The API enforces every permission on its own. */
 export function Layout() {
-  const { me, can, canAny, hasFeature, signOut, switchTenant } = useAuth();
+  const { me, can, canAny, hasFeature, signOut, switchTenant, preview, stopPreview } = useAuth();
   const navigate = useNavigate();
   if (!me || me.selecting) return null;
   const t = me.tenant;
@@ -43,6 +43,9 @@ export function Layout() {
         { to: "/roles", label: "Roles", show: can("roles.manage") },
         { to: "/api-keys", label: "API keys", show: can("apikeys.manage") && hasFeature("screening") },
         { to: "/security", label: "Security settings", show: can("security.manage") },
+        { to: "/access-reviews", label: "Access reviews", show: can("access.review") },
+        { to: "/owner-access", label: "Platform access requests", show: can("security.manage") },
+        { to: "/teams", label: "Teams", show: can("teams.manage") && !!me.teams_enabled },
       ],
     },
     {
@@ -51,6 +54,15 @@ export function Layout() {
         { to: "/organizations", label: "Organizations", show: canAny("platform.tenants.manage", "platform.support") },
         { to: "/platform-security", label: "Security baseline", show: can("platform.security.manage") },
         { to: "/plans", label: "Plans", show: canAny("platform.plans.manage", "platform.tenants.manage") },
+      ],
+    },
+    {
+      title: "Platform team",
+      items: [
+        { to: "/staff", label: "Staff", show: can("platform.users.manage") },
+        { to: "/approvals", label: "Approvals", show: canAny("platform.owners.manage", "platform.security.manage", "platform.tenants.delete", "platform.tenants.manage") },
+        { to: "/access-sessions", label: "Tenant access sessions", show: canAny("platform.tenant.access", "platform.audit.view") },
+        { to: "/staff-reviews", label: "Staff access review", show: can("platform.owners.manage") },
       ],
     },
   ];
@@ -112,6 +124,14 @@ export function Layout() {
         </div>
       </nav>
       <main className="page">
+        {preview && (
+          <div className="accessbanner" role="status">
+            <div>
+              <b>Previewing as {preview.role}.</b> The screens show what this role would see. The server still applies your own permissions to everything you do.
+            </div>
+            <button type="button" className="btn" onClick={stopPreview}>Exit preview</button>
+          </div>
+        )}
         {me.access_session && (
           <div className="accessbanner" role="status">
             <div>

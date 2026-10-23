@@ -243,3 +243,21 @@ Tenant jobs: `dormant_sweep`, `review_cycle`, `audit_stream`, `expire_exports`. 
 **SCIM 2.0 (Enterprise `scim`).** `/scim/v2/Users` and `/Groups` with a tenant admin's token (`POST /admin/scim/tokens`, shown once; the token fixes the tenant). Users are created without a password (they sign in through the company's identity provider) with the tenant's default role. `active: false` and DELETE **deprovision**: the membership is suspended and sessions end at once; nobody is deleted, and the last active Tenant admin can't be deprovisioned. Groups map to roles (`PUT /admin/scim/groups/{id}`, never the locked Tenant admin role): several groups give the role with the most permissions, no mapped group returns a person to the default role, and Tenant admins are never changed by groups.
 
 **Offboarding.** `POST /admin/data-export` (`data.export`) gives the whole tenant (organization, people, roles, cases, STRs, screenings, settings, audit log with its chain result) as one signed file, without any secret. A deleted tenant keeps its data until `deletion_due_at`; then `purge_deleted_tenants` removes every row carrying the tenant's id (discovered from the schema, so a new table can't be forgotten), keeps people who also belong to another tenant (they lose only this membership), blanks the organization row (it stays as a tombstone so the slug is never reused), and writes `tenant_data_removed` into the platform log with the counts and the final hash of the tenant's audit chain.
+
+## Admin screens and teams (phase 8)
+
+**Who sees what.** Every screen hides what a role can't use, and the server refuses it anyway: `tests/test_roles_e2e.py` signs in as every built-in role and calls every permission-protected route (the allowed ones must open, every other one must answer 401/403), and `frontend/src/pages/Governance.test.tsx` checks the navigation and the "No access" page for each role (the role permissions come from `frontend/src/test/roles.fixture.json`, generated from the catalogue: `python -m scripts.gen_frontend_roles`).
+
+| Who | Screens |
+|---|---|
+| Tenant admin | Users (with effective permissions), Roles (separation-of-duties warnings, preview as role), Security settings (including the governance settings and a full data export), Company sign-in, API keys (expiry, rotation), Access reviews, Platform access requests, Features, Audit log (signed exports), Teams (when switched on) |
+| Platform owner | Organizations (create, suspend, reactivate, delete request, request access), Plans, Security baseline, Staff, Approvals, Tenant access sessions, Staff access review, Audit log |
+| Platform support / auditor | Organizations (support), Tenant access sessions and the Audit log (auditor) |
+
+**Effective permissions.** `GET /admin/users/{id}/effective-permissions` and `GET /admin/roles/{id}/effective` list what a person or role can do (each permission with its wording and whether it asks for a fresh second factor), the plan features that are on, and any separation-of-duties warnings.
+
+**Preview as role.** On the Roles screen a Tenant admin can preview the app as another role: the navigation and screens show only what that role would see, a banner says so, and "Exit preview" returns. It changes the screens, never the server's decisions: every request still carries the admin's own permissions.
+
+**Separation of duties.** `catalogue.SOD_CONFLICTS` lists permission pairs one role should not hold together (draft and approve STRs, manage users and decide cases, edit policy and override screening, and so on). Saving or listing a role returns a plain-language warning per conflict. It never blocks (a small team may have a reason); the locked Tenant admin role is exempt.
+
+**Teams and queues (`TEAMS=true`, off by default).** A Tenant admin (`teams.manage`) defines teams and their members (`/admin/teams*`). An alert is placed in a team's queue (`PUT /cases/{id}/team`, `cases.decide`); members see their queues in `GET /me/teams` and `GET /alerts?team=...`. A queue only narrows what someone already sees: it never widens `cases.view` and never reaches a restricted case (row-level security still decides which alerts come back). A team must be made of active members of the tenant. With the flag off every team route answers 404 and the screens are hidden.

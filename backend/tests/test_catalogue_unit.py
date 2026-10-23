@@ -35,3 +35,8 @@ ok("orgs.manage" not in perms and not added, "an alias is not granted to someone
 doc = Path(__file__).resolve().parents[2] / "docs" / "permissions.md"
 ok(doc.exists() and doc.read_text(encoding="utf-8").replace("\r\n", "\n") == cat.render_markdown().replace("\r\n", "\n"),
    "docs/permissions.md is current (regenerate: python -m scripts.gen_permissions_doc)")
+
+from scripts import gen_frontend_roles
+fixture = gen_frontend_roles.target
+ok(fixture.exists() and fixture.read_text(encoding="utf-8").replace(chr(13) + chr(10), chr(10)) == gen_frontend_roles.render(),
+   "frontend/src/test/roles.fixture.json is current (regenerate: python -m scripts.gen_frontend_roles)")

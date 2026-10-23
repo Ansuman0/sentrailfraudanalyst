@@ -163,7 +163,7 @@ describe("API keys", () => {
 
 describe("Security settings", () => {
   const SETTINGS = {
-    mfa_required: false, sso_enabled: false, idle_timeout_min: 15, min_password_len: 14, ip_allowlist: [], retention_years: 7,
+    mfa_required: false, sso_enabled: false, idle_timeout_min: 15, min_password_len: 14, ip_allowlist: [], retention_years: 7, dormant_days: 90, access_review_days: 90, export_limit_per_hour: 20, anomaly_searches_per_hour: 100, anomaly_exports_per_hour: 10, alert_new_country: true,
     encryption: { algorithm: "AES-256-GCM", current_key: "v1", key_manager: "local (dev only)" },
   };
 
@@ -346,7 +346,7 @@ describe("Users: sensitive actions", () => {
 
 describe("Security settings: other fields", () => {
   const SETTINGS = {
-    mfa_required: false, sso_enabled: false, idle_timeout_min: 15, min_password_len: 14, ip_allowlist: ["10.0.0.0/8"], retention_years: 7,
+    mfa_required: false, sso_enabled: false, idle_timeout_min: 15, min_password_len: 14, ip_allowlist: ["10.0.0.0/8"], retention_years: 7, dormant_days: 90, access_review_days: 90, export_limit_per_hour: 20, anomaly_searches_per_hour: 100, anomaly_exports_per_hour: 10, alert_new_country: true,
     encryption: { algorithm: "AES-256-GCM", current_key: "v1", key_manager: "local (dev only)" },
   };
 

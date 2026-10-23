@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { BandBadge, ErrorBox, Loading, StatusBadge } from "../components/common";
 import { useAuth } from "../hooks/useAuth";
-import { cases } from "../services/sentrail";
+import { cases, teamsApi } from "../services/sentrail";
 import type { CaseDetail } from "../types/api";
 import { fmtDateTime, fmtNumber } from "../utils/format";
 
@@ -12,6 +12,7 @@ const STR_SUBMITTABLE = ["escalated", "awaiting_approval"];
 
 export function CaseView() {
   const { id = "" } = useParams();
+  const { me, can } = useAuth();
   const q = useQuery({ queryKey: ["case", id], queryFn: () => cases.get(id) });
 
   if (q.isPending) return <Loading label="Loading case…" />;
@@ -35,6 +36,7 @@ export function CaseView() {
           <BandBadge band={c.band} />
         </div>
       </div>
+      {me?.teams_enabled && can("cases.decide") && <QueueControl c={c} />}
       <div className="grid g2">
         <section className="panel">
           <h2>Why it scored</h2>
@@ -105,6 +107,26 @@ function Transactions({ c }: { c: CaseDetail }) {
         </div>
       )}
     </section>
+  );
+}
+
+/** Put this alert in one of my team queues (or take it out). A queue never changes who can open the case. */
+function QueueControl({ c }: { c: CaseDetail }) {
+  const qc = useQueryClient();
+  const mine = useQuery({ queryKey: ["my-teams"], queryFn: teamsApi.mine });
+  const set = useMutation({
+    mutationFn: (team: string) => cases.setTeam(c.alert.id, team || null),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ["case", c.alert.id] }), qc.invalidateQueries({ queryKey: ["alerts"] }), qc.invalidateQueries({ queryKey: ["my-teams"] })]),
+  });
+  return (
+    <div className="panel narrow">
+      <label htmlFor="queue">Team queue</label>
+      <select id="queue" value={c.alert.team_id ?? ""} disabled={set.isPending} onChange={(e) => set.mutate(e.target.value)}>
+        <option value="">No team</option>
+        {(mine.data?.teams ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
+      {set.isError && <ErrorBox error={set.error} />}
+    </div>
   );
 }
 

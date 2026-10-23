@@ -229,7 +229,9 @@ ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["plat
 
 # ---- down ----
 r = migrate("--down")
-ok(r.returncode == 0 and "reverted 015_governance_and_data_controls.sql" in r.stdout, "migration 015 reverts first")
+ok(r.returncode == 0 and "reverted 016_teams.sql" in r.stdout and q("SELECT to_regclass('teams') IS NULL")[0][0], "migration 016 reverts first")
+r = migrate("--down")
+ok(r.returncode == 0 and "reverted 015_governance_and_data_controls.sql" in r.stdout, "then migration 015")
 ok(q("SELECT to_regclass('scim_tokens') IS NULL AND to_regclass('access_reviews') IS NULL")[0][0] and
    q("SELECT count(*) FROM information_schema.columns WHERE table_name='security_settings' AND column_name='dormant_days'")[0][0] == 0,
    "015's tables and columns are gone")
@@ -267,7 +269,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout, "migrations 009 to 015 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout, "migrations 009 to 016 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),

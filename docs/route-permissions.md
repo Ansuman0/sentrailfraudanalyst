@@ -31,6 +31,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/admin/roles` | `roles.manage` |
 | POST | `/admin/roles` | `roles.manage` |
 | PUT | `/admin/roles/{role_id}` | `roles.manage` |
+| GET | `/admin/roles/{role_id}/effective` | `roles.manage` |
 | GET | `/admin/scim/groups` | `security.manage` |
 | PUT | `/admin/scim/groups/{gid}` | `security.manage` |
 | GET | `/admin/scim/tokens` | `security.manage` |
@@ -43,8 +44,15 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | DELETE | `/admin/sso/emergency` | `security.manage` |
 | PUT | `/admin/sso/emergency` | `security.manage` |
 | POST | `/admin/sso/verify` | `security.manage` |
+| GET | `/admin/teams` | `teams.manage` |
+| POST | `/admin/teams` | `teams.manage` |
+| DELETE | `/admin/teams/{tid}` | `teams.manage` |
+| GET | `/admin/teams/{tid}` | `teams.manage` |
+| PUT | `/admin/teams/{tid}` | `teams.manage` |
+| PUT | `/admin/teams/{tid}/members` | `teams.manage` |
 | GET | `/admin/users` | `users.manage` |
 | PATCH | `/admin/users/{uid}` | `users.manage` |
+| GET | `/admin/users/{uid}/effective-permissions` | `users.manage` |
 | POST | `/admin/users/{uid}/reset-mfa` | `users.manage` |
 | POST | `/admin/users/{uid}/reveal-email` | `users.pii.reveal` |
 | GET | `/alerts` | `cases.view` |
@@ -68,6 +76,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | PUT | `/cases/{alert_id}/restricted` | `cases.decide`, `cases.restricted.view` |
 | POST | `/cases/{alert_id}/str/approve` | `str.approve` |
 | POST | `/cases/{alert_id}/str/submit` | `str.draft` |
+| PUT | `/cases/{alert_id}/team` | `cases.decide` |
 | GET | `/healthz` | public (before sign-in) |
 | POST | `/invitations/accept` | public (before sign-in) |
 | GET | `/me` | signed in (own account only) |
@@ -83,6 +92,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/me/sessions` | signed in (own account only) |
 | POST | `/me/sessions/end-others` | signed in (own account only) |
 | DELETE | `/me/sessions/{family_id}` | signed in (own account only) |
+| GET | `/me/teams` | signed in (own account only) |
 | GET | `/me/tenants` | signed in (own account only) |
 | GET | `/platform/access` | any of `platform.audit.view`, `platform.tenant.access` |
 | GET | `/platform/access-reviews` | `platform.owners.manage` |

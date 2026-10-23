@@ -52,6 +52,9 @@ Status: accepted. Unreachable chain data or OFAC list → `hold`.
 ## Decision: Plain-script backend tests on a throwaway DB (`sentrail_test`)
 Status: accepted. No pytest migration planned; frontend uses Vitest.
 
+## Decision: Phase 8 screens and teams (access model v2)
+Status: accepted 2026-10-23 (approved with the recommended defaults). Teams are off unless `TEAMS=true`; a queue narrows, never widens, what someone sees. "Preview as role" changes only the screens (the server always applies the signed-in person's own permissions). Separation-of-duties conflicts warn and never block. The role fixture for web tests is generated from the catalogue and checked for freshness, so a template change forces a deliberate update of the per-role expectations.
+
 ## Decision: Phase 7 governance defaults (access model v2)
 Status: accepted 2026-10-23 (approved with the brief's defaults). Separate `worker` container runs `python -m scripts.run_jobs --loop` (every 5 min, DB advisory lock). Dormant period 90 days (tenant range 30-365); review every 90 days, overdue after 30, reminded weekly; export link 15 min single use; exports 20 per person per hour, alert at 10; searches alert at 100 per hour; audit stream https-only with HMAC signature, off after 50 failures; SCIM covers users and groups, groups map to roles (never the locked Tenant admin role), deprovision = suspend and end sessions, never delete. Tenant data removal keeps the organization row as a tombstone and cuts the audit log only through `purge_tenant_audit` after retention.
 
