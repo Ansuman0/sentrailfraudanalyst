@@ -25,6 +25,20 @@ export interface Me {
   mfa_setup: "required" | "optional" | null;
   /** This session was signed in with a second factor. */
   session_mfa: boolean;
+  /** "tenant" | "platform" | "select" (signed in, tenant not chosen yet: `tenant` is null and there are no permissions). */
+  scope?: "tenant" | "platform" | "select";
+  selecting?: boolean;
+  /** Where this person can work (access model v2). The header offers a switcher when there is more than one. */
+  tenants?: TenantChoice[];
+}
+
+export interface TenantChoice {
+  id: string | null; // null = the platform console
+  name: string;
+  slug: string;
+  role: string;
+  kind?: "tenant" | "platform";
+  current?: boolean;
 }
 
 export interface Reason {
@@ -157,7 +171,12 @@ export interface TokenResponse {
 }
 
 /** POST /auth/login: a code is needed (two-factor on), or a password-only session (two-factor not set up yet). */
-export type LoginResponse = { mfa_token: string; next: string } | (TokenResponse & { mfa_enabled: false });
+export type LoginResponse =
+  | { mfa_token: string; next: string }
+  | (TokenResponse & { mfa_enabled: false; route?: SignInRoute; tenants?: TenantChoice[] });
+
+/** Where a fresh sign-in lands: the console, one tenant, the tenant picker, or the no-access page. */
+export type SignInRoute = "console" | "tenant" | "picker" | "no_access";
 
 /** GET /platform/security. PUT replaces the whole object: omitted fields reset to the API's defaults. */
 export interface PlatformSecurity {

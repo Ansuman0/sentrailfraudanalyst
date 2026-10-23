@@ -3,9 +3,10 @@ import ipaddress
 import os
 import re
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Cookie, Query
 from fastapi.responses import RedirectResponse
 import jwt as pyjwt
@@ -17,12 +18,18 @@ from app.security import crypto, passwords, mfa, tokens, audit
 from app.security.rbac import Principal, require, require_any, current_user, signed_in_user, client_ip
 from app.security.middleware import limiter
 from app.access.catalogue import TENANT_ADMIN
-from app.services import mailer
+from app.services import mailer, notify
 from app.security import oidc
 
 router = APIRouter()
 APP_URL = os.environ.get("APP_URL", "http://localhost:5173")
-MAX_FAILED, LOCK_MIN = 5, 15
+# 10 failures within 15 minutes lock an (account, IP) pair for 15 minutes, so someone guessing from one network can't lock the real
+# owner out from theirs. Failures against one account from ALL networks also slow every answer (progressive delay) and, past
+# MAX_ACCOUNT_FAILED, lock it for everyone: distributed guessing is rare enough that this cap is high.
+MAX_FAILED, MAX_ACCOUNT_FAILED, LOCK_MIN, WINDOW_MIN = 10, 50, 15, 15
+LOGIN_DELAY_STEP = float(os.environ.get("LOGIN_DELAY_STEP", "0.25"))
+_UNSET = object()
+DEVICE_COOKIE = "sentrail_dv"
 
 PLATFORM_OWNER_ROLE = "00000000-0000-0000-0000-000000000002"
 # Roles and permissions are seed data in the database (migrations/005): role_templates, role_template_permissions.
@@ -59,41 +66,65 @@ TOO_MANY = "Too many attempts. Try again in a few minutes"
 
 
 def _throttle_locked(key: bytes, ip: str) -> bool:
+    """Locked per (account, IP) or per account across every IP."""
     with pg.pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT locked_until FROM login_throttle WHERE key_hash=%s AND ip=%s", (key, ip))
-        r = cur.fetchone()
-    return bool(r and r[0] and r[0] > _now())
+        cur.execute("SELECT 1 FROM login_throttle WHERE key_hash=%s AND ip IN (%s, '') AND locked_until > now()", (key, ip))
+        return cur.fetchone() is not None
 
 
 def _throttle_fail(key: bytes, ip: str) -> int:
+    """Count a failed sign-in against the (account, IP) pair and against the account as a whole; the count restarts when the last
+    failure is older than the window. Returns the highest count, which also drives the progressive delay."""
+    failed = 0
     with pg.pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("""INSERT INTO login_throttle (key_hash, ip, failed, updated_at) VALUES (%s,%s,1,now())
-                       ON CONFLICT (key_hash, ip) DO UPDATE SET
-                         failed = CASE WHEN login_throttle.locked_until < now() THEN 1 ELSE login_throttle.failed + 1 END,
-                         locked_until = CASE WHEN login_throttle.locked_until < now() THEN NULL ELSE login_throttle.locked_until END,
-                         updated_at = now()
-                       RETURNING failed""", (key, ip))
-        failed = cur.fetchone()[0]
-        if failed >= MAX_FAILED:
-            cur.execute("UPDATE login_throttle SET locked_until=%s WHERE key_hash=%s AND ip=%s",
-                        (_now() + timedelta(minutes=LOCK_MIN), key, ip))
+        # no known client address: the account row is also the pair row, with the ordinary limit
+        for where, limit in ([("", MAX_FAILED)] if ip == "" else [(ip, MAX_FAILED), ("", MAX_ACCOUNT_FAILED)]):
+            cur.execute("""INSERT INTO login_throttle (key_hash, ip, failed, updated_at) VALUES (%s,%s,1,now())
+                           ON CONFLICT (key_hash, ip) DO UPDATE SET
+                             failed = CASE WHEN login_throttle.locked_until < now()
+                                             OR login_throttle.updated_at < now() - make_interval(mins => %s) THEN 1
+                                           ELSE login_throttle.failed + 1 END,
+                             locked_until = CASE WHEN login_throttle.locked_until < now() THEN NULL ELSE login_throttle.locked_until END,
+                             updated_at = now()
+                           RETURNING failed""", (key, where, WINDOW_MIN))
+            n = cur.fetchone()[0]
+            failed = max(failed, n)
+            if n >= limit:
+                cur.execute("UPDATE login_throttle SET locked_until=now() + make_interval(mins => %s) WHERE key_hash=%s AND ip=%s",
+                            (LOCK_MIN, key, where))
         conn.commit()
     return failed
 
 
 def _throttle_clear(key: bytes, ip: str):
     with pg.pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM login_throttle WHERE key_hash=%s AND ip=%s", (key, ip))
+        cur.execute("DELETE FROM login_throttle WHERE key_hash=%s AND ip IN (%s, '')", (key, ip))
         conn.commit()
+
+
+def _progressive_delay(failed: int):
+    """After the second failure each further one answers a little slower (0.25 s more each, at most 1 s)."""
+    if failed > 2 and LOGIN_DELAY_STEP > 0:
+        time.sleep(min(1.0, LOGIN_DELAY_STEP * (failed - 2)))
+
+
+def csrf_guard(request: Request):
+    """Cookie-authenticated writes (refresh, sign-out) need a header a cross-site form or image can't send, and, when the browser
+    sends an Origin, it must be this app (or the host the API was reached on, for the same-origin fallback address)."""
+    if request.headers.get("x-sentrail-csrf") != "1":
+        raise HTTPException(403, "Request refused (missing CSRF header)")
+    origin = request.headers.get("origin")
+    if origin and urlparse(origin).netloc not in {urlparse(APP_URL).netloc, request.headers.get("host", "")}:
+        raise HTTPException(403, "Request refused (cross-site)")
 
 
 @router.post("/auth/login")
 @limiter.limit("5/minute")
 def login(request: Request, response: Response, body: Login):
-    """Every failure looks the same: unknown email, wrong password, an organization user who must use
-    Keycloak, or a non-active account all get the same 401 after the same password-hash work.
-    Lockout is per (email, client IP) and applies to unknown emails too, so a 429 reveals nothing,
-    and someone guessing from one network can't lock the real owner out of the break-glass login."""
+    """The one sign-in for everybody. Every failure looks the same: unknown email, wrong password, an organization user who must
+    use Keycloak, or a non-active account all get the same 401 after the same password-hash work. Lockout (10 failures in 15
+    minutes) is per (email, client IP), plus a high cap per email across IPs, and applies to unknown emails too, so a 429 reveals nothing.
+    A successful sign-in answers with `route`: console | tenant | picker | no_access (see _route)."""
     bidx = crypto.blind_index(body.email)
     ip = client_ip(request) or ""
     if _throttle_locked(bidx, ip):
@@ -103,19 +134,20 @@ def login(request: Request, response: Response, body: Login):
         found = cur.fetchone()
     if not found or (AUTH_MODE == "keycloak" and found[1] is not None):
         passwords.verify_password(None, body.password)          # same timing as a real check
-        _throttle_fail(bidx, ip)
+        _progressive_delay(_throttle_fail(bidx, ip))
         raise HTTPException(401, GENERIC_LOGIN_ERROR)
     uid, org = found
     error = None
     result = None
+    notice = None
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, role_id, session_version
+        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, role_id, session_version, email_enc
                        FROM users WHERE id=%s FOR UPDATE""", (uid,))
-        pw_hash, status, failed, mfa_enabled, role_id, sv = cur.fetchone()
+        pw_hash, status, failed, mfa_enabled, role_id, sv, email_enc = cur.fetchone()
         if not passwords.verify_password(pw_hash, body.password) or status != "active":
             failed += 1
             cur.execute("UPDATE users SET failed_logins=%s WHERE id=%s", (failed, uid))
-            audit.write(cur, org, uid, None, "login_failed", None, {"failed": failed}, client_ip(request))
+            audit.write(cur, org, uid, None, "auth.signin_failed", None, {"failed": failed}, client_ip(request))
             error = HTTPException(401, GENERIC_LOGIN_ERROR)       # raised after commit so the count is kept
         else:
             if passwords.needs_rehash(pw_hash):
@@ -125,12 +157,20 @@ def login(request: Request, response: Response, body: Login):
                 # No two-factor yet: a password-only session. The API limits it (rbac.current_user) until the
                 # user sets two-factor up, or, where the organization allows it, chooses to skip it.
                 cur.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (uid,))
-                audit.write(cur, org, uid, None, "login", None, {"method": "password", "mfa": False}, client_ip(request))
-                result = _issue(cur, response, uid, org, role_id, sv, request, method="password", mfa=False)
+                result = _start_session(cur, response, request, uid, org, role_id, sv, method="password", mfa=False)
+                audit.write(cur, org, uid, None, "auth.signin", None,
+                            {"method": "password", "mfa": False, "route": result["route"]}, client_ip(request))
+                notice = _device_notice(cur, request, response, uid, org, email_enc)
     if error:
-        _throttle_fail(bidx, ip)
+        failed_total = _throttle_fail(bidx, ip)
+        if _throttle_locked(bidx, ip):
+            with pg.tx(org, platform=org is None) as cur:
+                audit.write(cur, org, uid, None, "auth.locked", None, {"failures": failed_total, "minutes": LOCK_MIN}, client_ip(request))
+        _progressive_delay(failed_total)
         raise error
     _throttle_clear(bidx, ip)
+    if notice:
+        notify.security_event(*notice)
     if result:
         return {**result, "mfa_enabled": False}
     return {"mfa_token": tokens.issue_mfa_pending(uid), "next": "Enter the code from your authenticator app"}
@@ -159,19 +199,99 @@ def _session_limits(cur, org) -> tuple[int, int]:
     return idle, max_hours
 
 
-def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="password+totp", mfa=True):
-    idle, _ = _session_limits(cur, org)
+def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="password+totp", mfa=True,
+           scope=None, last_mfa_at=_UNSET):
+    """Start or renew a session: a refresh token (cookie) in family `family` and a short access token.
+    The session is bound to one active tenant (org; None for the console or while choosing). last_mfa_at defaults to now when this
+    sign-in used a second factor; a refresh passes the stored value so renewing a session never refreshes the step-up clock."""
+    scope = scope or ("platform" if org is None else "tenant")
+    if last_mfa_at is _UNSET:
+        last_mfa_at = _now() if mfa else None
+    with pg.tx(org, platform=org is None) as limits_cur:        # the target tenant's own timeouts, whatever tenant `cur` is in
+        idle, _ = _session_limits(limits_cur, org)
     raw = tokens.new_opaque()
     family = family or uuid.uuid4()
-    cur.execute("""INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at, user_agent, ip, auth_method)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+    cur.execute("""INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at, user_agent, ip, auth_method,
+                                               last_mfa_at, tenant_id, scope)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (uid, family, crypto.sha256(raw), tokens.refresh_expiry(),
-                 request.headers.get("user-agent", "")[:200], client_ip(request), method))
+                 request.headers.get("user-agent", "")[:200], client_ip(request), method, last_mfa_at, org, scope))
     _set_refresh(response, raw)
     ttl = min(tokens.ACCESS_TTL, timedelta(minutes=idle))
-    return {"access_token": tokens.issue_access(uid, org, role_id, sv, mfa=mfa, ttl=ttl, session_id=family),
+    return {"access_token": tokens.issue_access(uid, org, role_id, sv, mfa=mfa, ttl=ttl, session_id=family, scope=scope,
+                                                last_mfa_at=last_mfa_at),
             "token_type": "Bearer",
             "expires_in": int(ttl.total_seconds())}
+
+
+def _route(uid, home_org) -> dict:
+    """Where a fresh sign-in lands (brief 3.5). Old model: the user's own organization, or the console for platform staff.
+    New model (ACCESS_MODEL_V2): platform staff -> console; exactly one active membership -> that tenant; several -> the picker
+    (a session with no tenant yet); none -> the no-access page (also tenant-less)."""
+    if not config.ACCESS_MODEL_V2:
+        return {"route": "console" if home_org is None else "tenant", "org": home_org, "role_id": None,
+                "scope": "platform" if home_org is None else "tenant", "tenants": []}
+    staff, mems = _memberships(uid)
+    tenants = [{"id": str(m[0]), "name": m[1], "slug": m[2], "role": m[5]} for m in mems]
+    if staff:
+        return {"route": "console", "org": None, "role_id": staff[0], "scope": "platform", "tenants": tenants}
+    if len(mems) == 1:
+        return {"route": "tenant", "org": mems[0][0], "role_id": mems[0][4], "scope": "tenant", "tenants": tenants}
+    return {"route": "picker" if mems else "no_access", "org": None, "role_id": None, "scope": "select", "tenants": tenants}
+
+
+def _memberships(uid):
+    """(platform staff row if active, active memberships in tenants that are active) without needing a tenant context."""
+    with pg.pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT role_id, role_name, status FROM platform_staff_lookup(%s)", (uid,))
+        staff = cur.fetchone()
+        cur.execute("""SELECT tenant_id, tenant_name, slug, tenant_status, role_id, role_name, status
+                       FROM membership_lookup(%s)""", (uid,))
+        mems = [m for m in cur.fetchall() if m[6] == "active" and m[3] in ("active", "trial")]
+    return (staff if staff and staff[2] == "active" else None), mems
+
+
+def _start_session(cur, response, request, uid, home_org, role_id, sv, *, method, mfa):
+    r = _route(uid, home_org)
+    session = _issue(cur, response, uid, r["org"], r["role_id"] or role_id, sv, request, method=method, mfa=mfa, scope=r["scope"])
+    return {**session, "route": r["route"], "tenants": r["tenants"]}
+
+
+def _device_notice(cur, request, response, uid, org, email_enc):
+    """Remember this browser (a random device cookie; only its hash is stored). Returns (email, "new_device", detail) when it is a
+    device this person has not used before and they have signed in before, so the address can be told."""
+    raw = request.cookies.get(DEVICE_COOKIE)
+    cur.execute("SELECT count(*) FROM user_devices WHERE user_id=%s", (uid,))
+    known = cur.fetchone()[0]
+    if raw:
+        cur.execute("UPDATE user_devices SET last_seen=now(), ip=%s WHERE user_id=%s AND device_hash=%s RETURNING 1",
+                    (client_ip(request), uid, crypto.sha256(raw)))
+        if cur.fetchone():
+            return None
+    raw = tokens.new_opaque()
+    cur.execute("INSERT INTO user_devices (user_id, device_hash, ip, user_agent) VALUES (%s,%s,%s,%s)",
+                (uid, crypto.sha256(raw), client_ip(request), request.headers.get("user-agent", "")[:200]))
+    response.set_cookie(DEVICE_COOKIE, raw, httponly=True, secure=True, samesite="strict", path="/auth", max_age=2 * 365 * 86400)
+    if not known:
+        return None
+    return (crypto.decrypt(email_enc, org, "email"), "new_device", {"where": (request.headers.get("user-agent", "")[:60] or None)})
+
+
+def _second_factor(cur, uid, org, enc, last, code, recovery_code) -> bool:
+    """Check a TOTP code (with replay protection) or a single-use recovery code for this user."""
+    if code:
+        step = mfa.verify(crypto.decrypt(enc, org, "totp"), code, last)
+        if step:
+            cur.execute("UPDATE users SET totp_last_step=%s WHERE id=%s", (step, uid))
+            return True
+    elif recovery_code:
+        cur.execute("SELECT ctid, code_hash FROM recovery_codes WHERE user_id=%s AND used_at IS NULL", (uid,))
+        rows = cur.fetchall()
+        i = mfa.check_recovery(recovery_code, [r[1] for r in rows])
+        if i is not None:
+            cur.execute("UPDATE recovery_codes SET used_at=now() WHERE ctid=%s", (rows[i][0],))
+            return True
+    return False
 
 
 @router.post("/auth/mfa")
@@ -182,33 +302,28 @@ def verify_mfa(request: Request, response: Response, body: MfaIn):
     except Exception:
         raise HTTPException(401, "Sign-in expired. Start again")
     org = _org_of(uid)
+    notice = None
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""SELECT totp_secret_enc, totp_last_step, role_id, session_version, mfa_enabled, status
+        cur.execute("""SELECT totp_secret_enc, totp_last_step, role_id, session_version, mfa_enabled, status, email_enc
                        FROM users WHERE id=%s FOR UPDATE""", (uid,))
         row = cur.fetchone()
         if not row or not row[4] or not row[0] or row[5] != "active":
             # Account removed, suspended, or two-factor turned off since the password step: start over.
             raise HTTPException(401, "Sign-in expired. Start again")
-        enc, last, role_id, sv = row[:4]
-        ok = False
-        if body.code:
-            step = mfa.verify(crypto.decrypt(enc, org, "totp"), body.code, last)
-            if step:
-                cur.execute("UPDATE users SET totp_last_step=%s WHERE id=%s", (step, uid)); ok = True
-        elif body.recovery_code:
-            cur.execute("SELECT ctid, code_hash FROM recovery_codes WHERE user_id=%s AND used_at IS NULL", (uid,))
-            rows = cur.fetchall()
-            i = mfa.check_recovery(body.recovery_code, [r[1] for r in rows])
-            if i is not None:
-                cur.execute("UPDATE recovery_codes SET used_at=now() WHERE ctid=%s", (rows[i][0],)); ok = True
+        enc, last, role_id, sv, _, _, email_enc = row
+        ok = _second_factor(cur, uid, org, enc, last, body.code, body.recovery_code)
         if not ok:
-            audit.write(cur, org, uid, None, "mfa_failed", None, {}, client_ip(request))
+            audit.write(cur, org, uid, None, "auth.signin_failed", None, {"stage": "second_factor"}, client_ip(request))
         else:
             cur.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (uid,))
-            audit.write(cur, org, uid, None, "login", None, {"method": "totp" if body.code else "recovery_code"}, client_ip(request))
-            result = _issue(cur, response, uid, org, role_id, sv, request)
+            result = _start_session(cur, response, request, uid, org, role_id, sv, method="password+totp", mfa=True)
+            audit.write(cur, org, uid, None, "auth.signin", None,
+                        {"method": "totp" if body.code else "recovery_code", "mfa": True, "route": result["route"]}, client_ip(request))
+            notice = _device_notice(cur, request, response, uid, org, email_enc)
     if not ok:
         raise HTTPException(401, "That code didn't work. Check your app and try again")
+    if notice:
+        notify.security_event(*notice)
     return result
 
 
@@ -221,49 +336,58 @@ def _org_of(uid):
     return r[0]
 
 
-@router.post("/auth/refresh")
+@router.post("/auth/refresh", dependencies=[Depends(csrf_guard)])
 def refresh(request: Request, response: Response, sentrail_rt: str | None = Cookie(None)):
     if not sentrail_rt:
         raise HTTPException(401, "Sign in again")
     h = crypto.sha256(sentrail_rt)
     error = None
+    result = None
+    # One transaction: the old token is revoked and the new one stored together, so the session is never without a live token.
     with pg.tx(platform=True) as cur:
         cur.execute("""SELECT t.id, t.user_id, t.family_id, t.expires_at, t.revoked_at, t.created_at,
-                              (SELECT min(created_at) FROM refresh_tokens f WHERE f.family_id=t.family_id), t.auth_method
+                              (SELECT min(created_at) FROM refresh_tokens f WHERE f.family_id=t.family_id), t.auth_method,
+                              t.tenant_id, t.scope, t.last_mfa_at
                        FROM refresh_tokens t WHERE t.token_hash=%s FOR UPDATE""", (h,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(401, "Sign in again")
-        tid, uid, fam, exp, revoked, last_active, started, method = row
+        tid, uid, fam, exp, revoked, last_active, started, method, tenant, scope, lmfa = row
         if revoked:   # reuse of a rotated token: assume theft, end every session in this family
             cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (fam,))
             error = "reuse"
         elif exp < _now():
             error = "expired"
         else:
-            # Organization idle timeout and the platform's maximum session length. Each refresh token is
+            # The tenant's idle timeout and the platform's maximum session length. Each refresh token is
             # issued when the previous one is used, so its created_at is the last time this session was active.
-            idle, max_hours = _session_limits(cur, _org_of(uid))
+            idle, max_hours = _session_limits(cur, tenant)
             if _now() - last_active > timedelta(minutes=idle) or _now() - started > timedelta(hours=max_hours):
                 cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (fam,))
                 error = "timed_out"
             else:
-                cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE id=%s", (tid,))
+                with pg.pool().connection() as conn, conn.cursor() as c2:
+                    c2.execute("SELECT status, session_version, role_id FROM session_user_lookup(%s)", (uid,))
+                    u = c2.fetchone()
+                access_ok = bool(u and u[0] == "active")
+                if access_ok and config.ACCESS_MODEL_V2 and scope != "select":
+                    staff, mems = _memberships(uid)
+                    access_ok = not ((scope == "platform" and not staff) or (scope == "tenant" and tenant not in [m[0] for m in mems]))
+                if not access_ok:
+                    cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (fam,))
+                    error = "access_changed"
+                else:
+                    cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE id=%s", (tid,))
+                    # same assurance as the original sign-in: a password-only session stays password-only, and renewing a
+                    # session never refreshes its step-up clock (last_mfa_at is carried over as it was)
+                    result = _issue(cur, response, uid, tenant, u[2], u[1], request, family=fam,
+                                    method=method or "password+totp", mfa=method != "password", scope=scope, last_mfa_at=lmfa)
     if error:
-        org = _org_of(uid)
         if error == "reuse":
-            with pg.tx(org, platform=org is None) as cur:
-                audit.write(cur, org, uid, None, "refresh_token_reuse_detected", str(fam), {}, client_ip(request))
+            with pg.tx(tenant, platform=tenant is None) as cur:
+                audit.write(cur, tenant, uid, None, "refresh_token_reuse_detected", str(fam), {}, client_ip(request))
         raise HTTPException(401, "Sign in again")
-    org = _org_of(uid)
-    with pg.tx(org, platform=org is None) as cur:
-        cur.execute("SELECT status, role_id, session_version FROM users WHERE id=%s", (uid,))
-        status, role_id, sv = cur.fetchone()
-        if status != "active":
-            raise HTTPException(401, "Your account isn't active")
-        # same assurance as the original sign-in: a password-only session stays password-only
-        return _issue(cur, response, uid, org, role_id, sv, request, family=fam, method=method or "password+totp",
-                      mfa=method != "password")
+    return result
 
 
 # =====================================================================
@@ -338,7 +462,7 @@ def oidc_callback(request: Request, code: str | None = None, state: str | None =
             if status == "invited":
                 cur.execute("UPDATE users SET status='active' WHERE id=%s", (uid,))
             cur.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (uid,))
-            audit.write(cur, org, uid, None, "login", None, {"via": "oidc", "amr": claims.get("amr")}, client_ip(request))
+            audit.write(cur, org, uid, None, "auth.signin", None, {"via": "oidc", "amr": claims.get("amr")}, client_ip(request))
             _issue(cur, response, uid, org, role_id, sv, request, method="keycloak")
     return _fail("suspended") if blocked else response
 
@@ -377,24 +501,30 @@ def _link_identity(claims) -> tuple:
 
 
 @router.get("/auth/oidc/logout")
-def oidc_logout(sentrail_rt: str | None = Cookie(None)):
-    if sentrail_rt:
-        with pg.tx(platform=True) as cur:
-            cur.execute("""UPDATE refresh_tokens SET revoked_at=now() WHERE family_id =
-                           (SELECT family_id FROM refresh_tokens WHERE token_hash=%s) AND revoked_at IS NULL""",
-                        (crypto.sha256(sentrail_rt),))
+def oidc_logout(request: Request, sentrail_rt: str | None = Cookie(None)):
+    _end_session(sentrail_rt, request)
     resp = RedirectResponse(oidc.logout_url(), status_code=302)
     resp.delete_cookie("sentrail_rt", path="/auth")
     return resp
 
 
-@router.post("/auth/logout")
-def logout(response: Response, sentrail_rt: str | None = Cookie(None)):
-    if sentrail_rt:
-        with pg.tx(platform=True) as cur:
-            cur.execute("""UPDATE refresh_tokens SET revoked_at=now() WHERE family_id =
-                           (SELECT family_id FROM refresh_tokens WHERE token_hash=%s) AND revoked_at IS NULL""",
-                        (crypto.sha256(sentrail_rt),))
+def _end_session(cookie: str | None, request: Request):
+    """Revoke the whole session family behind this refresh cookie and record `auth.signout` in its tenant's audit log."""
+    if not cookie:
+        return
+    with pg.tx(platform=True) as cur:
+        cur.execute("SELECT user_id, tenant_id, family_id FROM refresh_tokens WHERE token_hash=%s", (crypto.sha256(cookie),))
+        row = cur.fetchone()
+        if row:
+            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (row[2],))
+    if row:
+        with pg.tx(row[1], platform=row[1] is None) as cur:
+            audit.write(cur, row[1], row[0], None, "auth.signout", None, {}, client_ip(request))
+
+
+@router.post("/auth/logout", dependencies=[Depends(csrf_guard)])
+def logout(request: Request, response: Response, sentrail_rt: str | None = Cookie(None)):
+    _end_session(sentrail_rt, request)
     response.delete_cookie("sentrail_rt", path="/auth")
     return {"signed_out": True}
 
@@ -641,7 +771,7 @@ def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Princ
     """Turn two-factor on. Ends every session of this user (they were password-only) and starts a new,
     two-factor session for this device. Returns single-use recovery codes, shown once."""
     with pg.tx(p.org_id, platform=p.platform) as cur:
-        _local_user(cur, p)
+        email_enc = _local_user(cur, p)
         cur.execute("SELECT totp_secret_enc, totp_last_step, role_id, session_version FROM users WHERE id=%s", (p.user_id,))
         enc, last, role_id, sv = cur.fetchone()
         if not enc:
@@ -657,7 +787,9 @@ def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Princ
             cur.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (%s,%s)", (p.user_id, h))
         cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (p.user_id,))
         _audit(cur, p, "mfa_enabled", None, {"method": "totp"})
-        session = _issue(cur, response, p.user_id, p.org_id, role_id, sv + 1, request)
+        session = _issue(cur, response, p.user_id, p.org_id, role_id, sv + 1, request, scope=p.scope)
+        address = crypto.decrypt(email_enc, p.org_id, "email")
+    notify.security_event(address, "mfa_enabled")
     return {**session, "recovery_codes": codes,
             "message": "Save these codes somewhere safe. Each works once and they won't be shown again"}
 
@@ -701,6 +833,7 @@ class UserPatch(BaseModel):
 def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require("users.manage"))):
     if str(uid) == p.user_id:
         raise HTTPException(403, "You can't change your own role or status. Ask another admin")
+    role_notice = None
     with pg.tx(p.org_id) as cur:
         cur.execute("SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", (uid,))
         cur_role = cur.fetchone()
@@ -711,7 +844,8 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
             _no_escalation(cur, p, body.role_id)
             if cur_role[0] == TENANT_ADMIN and new_role != TENANT_ADMIN:
                 _keep_one_admin(cur, p.org_id)
-            cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (body.role_id, uid))
+            cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s RETURNING email_enc", (body.role_id, uid))
+            role_notice = (crypto.decrypt(cur.fetchone()[0], p.org_id, "email"), "role_changed", {"where": new_role})
             _audit(cur, p, "role_changed", str(uid), {"from": cur_role[0], "to": new_role})
         if body.status:
             cur.execute("SELECT status FROM users WHERE id=%s", (uid,))
@@ -725,6 +859,8 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
             if AUTH_MODE == "keycloak" and subj:
                 kc().set_enabled(subj, body.status == "active")   # also ends their Keycloak sessions
             _audit(cur, p, f"user_{body.status}", str(uid), {"sessions_ended": True})
+    if role_notice:
+        notify.security_event(*role_notice)
     return {"ok": True}
 
 
@@ -752,12 +888,15 @@ def reset_mfa(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("user
         return {"ok": True}
     with pg.tx(p.org_id) as cur:
         cur.execute("""UPDATE users SET totp_secret_enc=NULL, mfa_enabled=false, totp_last_step=0,
-                       session_version=session_version+1 WHERE id=%s RETURNING 1""", (uid,))
-        if not cur.fetchone():
+                       session_version=session_version+1 WHERE id=%s RETURNING email_enc""", (uid,))
+        gone = cur.fetchone()
+        if not gone:
             raise HTTPException(404, "User not found")
+        address = crypto.decrypt(gone[0], p.org_id, "email")
         cur.execute("DELETE FROM recovery_codes WHERE user_id=%s", (uid,))
         cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
         _audit(cur, p, "mfa_reset", str(uid), {"reason": body.reason})
+    notify.security_event(address, "mfa_reset")
     return {"ok": True, "next": "They'll be asked to set up two-factor again at their next sign-in"}
 
 
@@ -977,23 +1116,137 @@ def audit_verify(p: Principal = Depends(require_any("audit.view", "platform.audi
         return audit.verify_rows(cur.fetchall())
 
 
+def _tenant_list(p: Principal) -> list[dict]:
+    """The places this person can work: the console (platform staff) and every tenant with an active membership.
+    Only with the access model v2 (one session, one tenant at a time; the old model has exactly one)."""
+    if not config.ACCESS_MODEL_V2:
+        return []
+    staff, mems = _memberships(p.user_id)
+    out = [{"id": str(m[0]), "name": m[1], "slug": m[2], "role": m[5], "kind": "tenant",
+            "current": p.scope == "tenant" and p.org_id == str(m[0])} for m in mems]
+    if staff:
+        out.insert(0, {"id": None, "name": "Platform console", "slug": "platform", "role": staff[1], "kind": "platform",
+                       "current": p.scope == "platform"})
+    return out
+
+
 @router.get("/me")
 def me(p: Principal = Depends(signed_in_user)):
     """Who is signed in and which tenant, so the UI can show the organization under the app name."""
+    home = _org_of(p.user_id)         # the person's own row sits in their home organization (see migration 010)
+    with pg.tx(home, platform=home is None) as cur:
+        cur.execute("SELECT name_enc, email_enc FROM users WHERE id=%s", (p.user_id,))
+        n_enc, e_enc = cur.fetchone()
+    person = {"user_id": p.user_id, "name": crypto.decrypt(n_enc, home, "name"),
+              "email": crypto.mask_email(crypto.decrypt(e_enc, home, "email"))}
+    tenants = _tenant_list(p)
+    if p.selecting:        # signed in but no tenant chosen yet (several memberships) or no access at all
+        return {**person, "role": None, "tenant": None, "permissions": [], "features": [], "mfa_enabled": True, "mfa_setup": None,
+                "session_mfa": p.mfa, "scope": "select", "selecting": True, "tenants": tenants}
     tenant = {"name": "Platform console", "slug": "platform", "environment": "platform", "brand_color": "#534AB7"}
     if p.org_id:
         with pg.pool().connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT legal_name, slug, environment, brand_color FROM org_display(%s)", (p.org_id,))
             n, slug, env, color = cur.fetchone()
         tenant = {"id": p.org_id, "name": n, "slug": slug, "environment": env, "brand_color": color}
-    with pg.tx(p.org_id, platform=p.platform) as cur:
-        cur.execute("SELECT name_enc, email_enc FROM users WHERE id=%s", (p.user_id,))
-        n_enc, e_enc = cur.fetchone()
-    return {"user_id": p.user_id, "name": crypto.decrypt(n_enc, p.org_id, "name"),
-            "email": crypto.mask_email(crypto.decrypt(e_enc, p.org_id, "email")), "role": p.role,
+    return {**person, "role": p.role,
             "tenant": tenant, "permissions": sorted(p.perms), "features": sorted(p.features),
             # mfa_setup: "required" (the organization insists), "optional" (turn it on from My account), or None (it's on)
-            "mfa_enabled": p.mfa_setup is None, "mfa_setup": p.mfa_setup, "session_mfa": p.mfa}
+            "mfa_enabled": p.mfa_setup is None, "mfa_setup": p.mfa_setup, "session_mfa": p.mfa,
+            "scope": p.scope, "selecting": False, "tenants": tenants, "step_up_fresh": p.mfa_fresh()}
+
+
+@router.get("/me/tenants")
+def my_tenants(p: Principal = Depends(signed_in_user)):
+    return {"tenants": _tenant_list(p)}
+
+
+class TenantSwitch(BaseModel):
+    tenant_id: uuid.UUID | None = None      # null = the platform console (platform staff only)
+
+
+@router.post("/session/tenant")
+@limiter.limit("20/minute")
+def switch_tenant(request: Request, response: Response, body: TenantSwitch, p: Principal = Depends(signed_in_user)):
+    """Move this sign-in to another tenant (or the console). The target must be one of the caller's active memberships; the
+    old session ends and a new one (new session id) starts, so nothing from one tenant carries into the next. Audited."""
+    if not config.ACCESS_MODEL_V2:
+        raise HTTPException(403, "Switching tenants isn't available yet")
+    staff, mems = _memberships(p.user_id)
+    target, role_id = body.tenant_id, None
+    if target is None:
+        if not staff:
+            raise HTTPException(403, "You don't have access to the platform console")
+        role_id = staff[0]
+    else:
+        m = next((m for m in mems if m[0] == target), None)
+        if not m:
+            raise HTTPException(403, "You don't have access to that tenant")
+        role_id = m[4]
+    family = None
+    try:
+        family = uuid.UUID(p.session_id) if p.session_id else None
+    except ValueError:
+        pass
+    old = None
+    with pg.tx(platform=True) as cur:
+        if family:
+            cur.execute("""SELECT auth_method, last_mfa_at, tenant_id FROM refresh_tokens WHERE family_id=%s
+                           ORDER BY created_at DESC LIMIT 1""", (family,))
+            old = cur.fetchone()
+            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (family,))
+        cur.execute("SELECT session_version FROM session_user_lookup(%s)", (p.user_id,))
+        sv = cur.fetchone()[0]
+    method, last_mfa, source = (old[0], old[1], old[2]) if old else ("password" if not p.mfa else "password+totp", None, p.org_id)
+    with pg.tx(target, platform=target is None) as cur:
+        session = _issue(cur, response, p.user_id, target, role_id, sv, request, method=method, mfa=p.mfa,
+                         scope="platform" if target is None else "tenant", last_mfa_at=last_mfa)
+        audit.write(cur, target, p.user_id, None, "auth.tenant_switch", None,
+                    {"from": str(source) if source else "platform", "to": str(target) if target else "platform"}, client_ip(request))
+    if source != target:
+        with pg.tx(source, platform=source is None) as cur:
+            audit.write(cur, source, p.user_id, None, "auth.tenant_switch", None,
+                        {"from": str(source) if source else "platform", "to": str(target) if target else "platform"}, client_ip(request))
+    return session
+
+
+class StepUpIn(BaseModel):
+    code: str | None = Field(None, max_length=10)
+    recovery_code: str | None = Field(None, max_length=40)
+
+
+@router.post("/session/step-up")
+@limiter.limit("10/minute")
+def step_up(request: Request, body: StepUpIn, p: Principal = Depends(signed_in_user)):
+    """Prove a second factor again for a sensitive action. Answers with a new access token whose last-two-factor time is now."""
+    if p.selecting:
+        raise HTTPException(403, "Choose a tenant first")
+    home = _org_of(p.user_id)
+    with pg.tx(home, platform=home is None) as cur:
+        cur.execute("""SELECT totp_secret_enc, totp_last_step, role_id, session_version, mfa_enabled, status
+                       FROM users WHERE id=%s FOR UPDATE""", (p.user_id,))
+        row = cur.fetchone()
+        if not row or row[5] != "active" or not row[4] or not row[0]:
+            raise HTTPException(409, "Turn on two-factor authentication first")
+        enc, last, role_id, sv = row[:4]
+        ok = _second_factor(cur, p.user_id, home, enc, last, body.code, body.recovery_code)
+    with pg.tx(p.org_id, platform=p.org_id is None) as cur:
+        if not ok:
+            audit.write(cur, p.org_id, p.user_id, None, "auth.step_up_failed", None, {}, client_ip(request))
+        else:
+            audit.write(cur, p.org_id, p.user_id, None, "auth.step_up", None,
+                        {"method": "totp" if body.code else "recovery_code"}, client_ip(request))
+            idle, _ = _session_limits(cur, p.org_id)
+    if not ok:
+        raise HTTPException(401, "That code didn't work. Check your app and try again")
+    now = _now()
+    with pg.tx(platform=True) as cur:
+        if p.session_id:
+            cur.execute("UPDATE refresh_tokens SET last_mfa_at=%s WHERE family_id=%s AND revoked_at IS NULL", (now, p.session_id))
+    ttl = min(tokens.ACCESS_TTL, timedelta(minutes=idle))
+    return {"access_token": tokens.issue_access(p.user_id, p.org_id, role_id, sv, mfa=True, ttl=ttl, session_id=p.session_id,
+                                                scope=p.scope, last_mfa_at=now),
+            "token_type": "Bearer", "expires_in": int(ttl.total_seconds())}
 
 
 def _current_family(p: Principal):

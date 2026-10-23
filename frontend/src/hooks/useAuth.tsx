@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { hasAccessToken, onSignedOut, refreshSession, setAccessToken } from "../services/http";
-import { auth, me as meApi } from "../services/sentrail";
+import { auth, me as meApi, tenants as tenantsApi } from "../services/sentrail";
 import type { Me } from "../types/api";
 
 type Status = "loading" | "signed_out" | "signed_in";
@@ -20,6 +20,8 @@ interface AuthState {
   hasFeature: (feature: string) => boolean;
   /** Re-read /me (permissions, features) after an admin change. A failure keeps the current session. */
   refreshMe: () => Promise<void>;
+  /** Move to another tenant (null = the platform console): a new session, then reload who and where we are. */
+  switchTenant: (tenantId: string | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -97,6 +99,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const switchTenant = useCallback(async (tenantId: string | null) => {
+    const r = await tenantsApi.switchTo(tenantId);
+    setAccessToken(r.access_token);
+    queryClient.clear(); // nothing from one tenant may show up in the next
+    setMe(await meApi.get());
+  }, [queryClient]);
+
   const value = useMemo<AuthState>(() => {
     const perms = new Set(me?.permissions ?? []);
     const features = new Set(me?.features ?? []);
@@ -106,9 +115,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       can: (p) => perms.has(p),
       canAny: (...ps) => ps.some((p) => perms.has(p)),
       hasFeature: (f) => features.has(f),
-      refreshMe,
+      refreshMe, switchTenant,
     };
-  }, [status, me, completeSignIn, signOut, refreshMe]);
+  }, [status, me, completeSignIn, signOut, refreshMe, switchTenant]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

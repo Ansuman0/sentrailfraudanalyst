@@ -5,6 +5,8 @@ os.environ.setdefault("AUTH_MODE", "local")
 import psycopg, pyotp
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from app.security.rbac import install_handlers
+CSRF = {"X-Sentrail-CSRF": "1"}
 from app import pg
 from app.security import crypto, passwords, mfa
 from app.security.middleware import limiter
@@ -12,8 +14,8 @@ import app.admin_api as api
 
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg)
-app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); limiter.enabled = False
-c = TestClient(app, base_url="https://testserver")
+app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); install_handlers(app); limiter.enabled = False
+c = TestClient(app, headers=CSRF, base_url="https://testserver")
 code = lambda s: pyotp.TOTP(s).at(int(time.time()) // 30 * 30)
 
 def login(email, pw, secret, wait=False):

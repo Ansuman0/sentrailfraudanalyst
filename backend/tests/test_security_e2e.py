@@ -6,17 +6,19 @@ SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@lo
 os.environ.setdefault("AUTH_MODE", "local")
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
+from app.security.rbac import install_handlers
+CSRF = {"X-Sentrail-CSRF": "1"}
 from app.admin_api import router
 from app.security.rbac import require
 from app.security.middleware import limiter, SecurityHeaders
 from app.security import crypto, passwords, mfa, audit
 from app import pg
 
-app = FastAPI(); app.state.limiter = limiter; app.add_middleware(SecurityHeaders); app.include_router(router)
+app = FastAPI(); app.state.limiter = limiter; app.add_middleware(SecurityHeaders); app.include_router(router); install_handlers(app)
 @app.get("/protected")
 def protected(p=Depends(require("str.approve"))): return {"ok": True}
 limiter.enabled = False
-c = TestClient(app, base_url="https://testserver")
+c = TestClient(app, headers=CSRF, base_url="https://testserver")
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg)
 
 def code_after(secret, last_step=0):
@@ -118,16 +120,16 @@ r = c.put("/admin/security", headers=A1, json={"retention_years":2})
 ok(r.status_code == 422, "retention below 5 years rejected")
 
 # --- refresh rotation + reuse detection ---
-c2 = TestClient(app, base_url="https://testserver")
+c2 = TestClient(app, headers=CSRF, base_url="https://testserver")
 r = c2.post("/auth/login", json={"email":"amir@mapleridge.ca","password":"violet harbour tram sixteen"})
 time.sleep(31 - time.time() % 30)  # next TOTP step for amir
 r = c2.post("/auth/mfa", json={"mfa_token": r.json()["mfa_token"], "code": code_after(s2)})
 old = c2.cookies.get("sentrail_rt")
 r1 = c2.post("/auth/refresh"); new = c2.cookies.get("sentrail_rt")
 c2.cookies.set("sentrail_rt", old, domain="testserver.local"); 
-c3 = TestClient(app, base_url="https://testserver"); c3.cookies.set("sentrail_rt", old)
+c3 = TestClient(app, headers=CSRF, base_url="https://testserver"); c3.cookies.set("sentrail_rt", old)
 r2 = c3.post("/auth/refresh")
-c4 = TestClient(app, base_url="https://testserver"); c4.cookies.set("sentrail_rt", new)
+c4 = TestClient(app, headers=CSRF, base_url="https://testserver"); c4.cookies.set("sentrail_rt", new)
 r3 = c4.post("/auth/refresh")
 ok(r1.status_code==200 and r2.status_code==401 and r3.status_code==401, "refresh token rotates; reusing an old one revokes the whole session family")
 
@@ -147,12 +149,12 @@ v = c.get("/admin/audit/verify", headers=A1).json()
 ok(not v["ok"], f"tampering by a database superuser is detected: {v.get('reason')} at event {v.get('broken_at')}")
 
 # --- account lockout survives the failed request ---
-for i in range(5):
+for i in range(10):
     c.post("/auth/login", json={"email": "ops@sentrail.dev", "password": f"wrong guess number {i}!"})
 r = c.post("/auth/login", json={"email": "ops@sentrail.dev", "password": "platform passphrase long enough"})
-ok(r.status_code == 429, "5 failed attempts lock the account, even against the right password")
+ok(r.status_code == 429, "10 failed attempts lock the account from this network, even against the right password")
 with psycopg.connect(SUPER) as o:
-    n = o.execute("SELECT count(*) FROM audit_events WHERE action='login_failed'").fetchone()[0]
+    n = o.execute("SELECT count(*) FROM audit_events WHERE action='auth.signin_failed'").fetchone()[0]
 ok(n >= 6, f"failed logins are kept in the audit log ({n} recorded)")
 
 # --- tenant shown in the app, sessions list ---
@@ -168,7 +170,7 @@ ok(n >= 2 and seen == 1, "an organization can read only its own organization rec
 
 # --- signed-in devices: the current session is recognised without the refresh cookie ---
 # (browsers send the cookie only to /auth, so /me/sessions must not depend on it)
-cL = TestClient(app, base_url="https://testserver")
+cL = TestClient(app, headers=CSRF, base_url="https://testserver")
 time.sleep(31 - time.time() % 30)                     # leah's next TOTP step
 r = cL.post("/auth/login", json={"email": "leah@northwind.ca", "password": "copper lantern river morning"})
 r = cL.post("/auth/mfa", json={"mfa_token": r.json()["mfa_token"], "code": code_after(s1)})

@@ -8,6 +8,8 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from app.security.rbac import install_handlers
+CSRF = {"X-Sentrail-CSRF": "1"}
 
 from app import pg
 from app.security import oidc, crypto, passwords, mfa
@@ -39,8 +41,8 @@ class FakeKC:
     def reset_second_factor(self, sub): pass
 api.kc = lambda: FakeKC()
 
-app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); limiter.enabled = False
-c = TestClient(app, base_url="https://testserver", follow_redirects=False)
+app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); install_handlers(app); limiter.enabled = False
+c = TestClient(app, headers=CSRF, base_url="https://testserver", follow_redirects=False)
 
 # ---- data: org with company SSO + users ----
 with pg.tx(platform=True) as cur:

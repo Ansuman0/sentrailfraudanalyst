@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { Logo } from "./Logo";
 
@@ -10,8 +10,9 @@ interface NavItem {
 
 /** Navigation only hides what a role can't use. The API enforces every permission on its own. */
 export function Layout() {
-  const { me, can, canAny, hasFeature, signOut } = useAuth();
-  if (!me) return null;
+  const { me, can, canAny, hasFeature, signOut, switchTenant } = useAuth();
+  const navigate = useNavigate();
+  if (!me || me.selecting) return null;
   const t = me.tenant;
   const groups: { title: string; items: NavItem[] }[] = [
     {
@@ -72,6 +73,15 @@ export function Layout() {
             </div>
           </div>
         </div>
+        {(me.tenants ?? []).length > 1 && (
+          <div className="switcher">
+            <label htmlFor="switch-tenant">Switch tenant</label>
+            <select id="switch-tenant" value={(me.tenants ?? []).find((x) => x.current)?.id ?? ""}
+                    onChange={(e) => { void switchTenant(e.target.value || null).then(() => navigate("/")); }}>
+              {(me.tenants ?? []).map((x) => <option key={x.id ?? "platform"} value={x.id ?? ""}>{x.name}</option>)}
+            </select>
+          </div>
+        )}
         {groups.map((g) => {
           const items = g.items.filter((i) => i.show);
           if (!items.length) return null;

@@ -2,7 +2,7 @@
 import { request } from "./http";
 import type {
   AdminUser, Alert, AlertStatus, ApiKey, AuditEvent, Band, CaseDetail, Investigation, LoginResponse, Me, Organization, Policy,
-  Plan, PlatformSecurity, RoleSummary, SearchResult, SecuritySettings, Session, TokenResponse, TraceResult,
+  Plan, PlatformSecurity, RoleSummary, SearchResult, SecuritySettings, Session, TenantChoice, TokenResponse, TraceResult,
 } from "../types/api";
 
 // ---- sign-in ----
@@ -20,6 +20,17 @@ export const auth = {
       method: "POST", body: { email }, retryOn401: false,
     }),
   logout: () => request<{ signed_out: boolean }>("/auth/logout", { method: "POST", withCookies: true, retryOn401: false }),
+  /** Prove a second factor again for a sensitive action; the answer carries a fresh access token. */
+  stepUp: (code: { code?: string; recovery_code?: string }) =>
+    request<TokenResponse>("/session/step-up", { method: "POST", body: code, retryOn401: false }),
+};
+
+// ---- tenants: the places this person can work, and moving between them (a new session each time) ----
+export const tenants = {
+  list: () => request<{ tenants: TenantChoice[] }>("/me/tenants"),
+  /** tenantId null = the platform console. */
+  switchTo: (tenantId: string | null) =>
+    request<TokenResponse>("/session/tenant", { method: "POST", body: { tenant_id: tenantId }, withCookies: true, retryOn401: false }),
 };
 
 // ---- invitation enrollment (the token is the credential; no session yet). Two-factor comes after sign-in. ----

@@ -4,11 +4,17 @@ import { useAuth } from "../hooks/useAuth";
 import { Loading } from "./common";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { status, mfaGate } = useAuth();
+  const { status, mfaGate, me } = useAuth();
   const location = useLocation();
   const back = location.pathname + location.search;
   if (status === "loading") return <div className="center"><Loading label="Checking your session…" /></div>;
   if (status === "signed_out") return <Navigate to={`/signin?return_to=${encodeURIComponent(back)}`} replace />;
+  if (me?.selecting) {
+    // Signed in but no tenant yet: pick one, or learn there is none.
+    const to = (me.tenants ?? []).length ? "/choose-tenant" : "/no-access";
+    if (location.pathname !== to) return <Navigate to={to} replace />;
+    return <>{children}</>;
+  }
   if (mfaGate && location.pathname !== "/setup-2fa") {
     return <Navigate to={`/setup-2fa?return_to=${encodeURIComponent(back)}`} replace />;
   }

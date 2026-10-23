@@ -5,8 +5,11 @@ Each request: verify JWT -> reload user (status, session version, role) -> check
 IP allowlist and idle policy -> check permission and feature -> run in tenant scope.
 """
 import ipaddress
+import os
+import time
 from dataclasses import dataclass, field
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
@@ -34,6 +37,13 @@ class Principal:
     mfa: bool = True                # this sign-in used a second factor (TOTP, recovery code or the IdP's)
     mfa_setup: str | None = None    # "required" | "optional" while the user has no 2FA; None once it's on
     alias_names: set = field(default_factory=set)   # old permission names this user holds only through a renamed permission
+    scope: str = "tenant"           # "tenant" | "platform" | "select" (signed in, tenant not chosen yet)
+    selecting: bool = False         # scope == "select": only /me, /me/tenants and /session/* are available
+    last_mfa_at: int | None = None  # epoch seconds of the last second-factor check in this session (step-up)
+
+    def mfa_fresh(self) -> bool:
+        """A second factor was proved within the step-up window."""
+        return self.last_mfa_at is not None and time.time() - self.last_mfa_at <= STEP_UP_WINDOW_SECONDS
 
     @property
     def platform(self) -> bool:
@@ -45,6 +55,23 @@ class Principal:
             log.info("permission alias used", extra={"event": "permission_alias_used", "user_id": self.user_id, "org_id": self.org_id,
                                                      "permission": perm})
         return perm in self.perms
+
+
+# How recently a second factor must have been proved for the permissions marked "step-up" in the catalogue.
+STEP_UP_WINDOW_SECONDS = int(os.environ.get("STEP_UP_WINDOW_MINUTES", "10")) * 60
+
+
+class StepUpRequired(Exception):
+    """Raised by require() when a step-up permission is used with a stale second factor. The answer is HTTP 401 {"error": "step_up_required"}."""
+    def __init__(self, perms):
+        self.perms = perms
+
+
+def install_handlers(app: FastAPI):
+    """Register the step-up answer on an app. main.py calls this; tests that build their own app call it too."""
+    @app.exception_handler(StepUpRequired)
+    async def _step_up(request: Request, exc: StepUpRequired):
+        return JSONResponse({"error": "step_up_required"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
 # Two-factor is each person's choice, made from My account. The only way it becomes mandatory is an organization
@@ -70,6 +97,14 @@ def client_ip(request: Request) -> str | None:
         return None
 
 
+def _session_alive(sid) -> bool:
+    if not sid:
+        return True
+    with pg.pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM refresh_tokens WHERE family_id=%s AND revoked_at IS NULL LIMIT 1", (sid,))
+        return cur.fetchone() is not None
+
+
 def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Principal:
     """The signed-in user, whether or not this sign-in used a second factor. Only /me and the two-factor
     setup endpoints use this directly; everything else goes through current_user."""
@@ -80,13 +115,32 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
     except jwt.PyJWTError:
         raise HTTPException(401, "Session expired. Sign in again", headers={"WWW-Authenticate": "Bearer"})
     ip = client_ip(request)
+    scope = c.get("scp") or ("platform" if c["org"] is None else "tenant")
+    if scope == "select":
+        # Signed in, tenant not chosen yet (several memberships, or none): no permissions at all.
+        with pg.pool().connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status, session_version FROM session_user_lookup(%s)", (c["sub"],))
+            u = cur.fetchone()
+        if not u or u[0] != "active" or u[1] != c["sv"] or not _session_alive(c.get("sid")):
+            raise HTTPException(401, "Your session has ended. Sign in again")
+        return Principal(c["sub"], None, "", set(), set(), ip, session_id=c.get("sid"), mfa="otp" in c.get("amr", []),
+                         scope="select", selecting=True, last_mfa_at=c.get("lmfa"))
     with pg.tx(c["org"], platform=c["org"] is None) as cur:
-        cur.execute("""SELECT u.status, u.session_version, u.role_id, u.mfa_enabled, u.auth_method = 'keycloak'
-                       FROM users u WHERE u.id = %s""", (c["sub"],))
+        if c["org"]:
+            # Request check order step 2: a suspended, pending or deleted tenant refuses everything.
+            cur.execute("SELECT status FROM organizations WHERE id=%s", (c["org"],))
+            st = cur.fetchone()
+            if not st or st[0] not in ("active", "trial"):
+                raise HTTPException(403, "This organization isn't active")
+        cur.execute("SELECT status, session_version, role_id, mfa_enabled, keycloak FROM session_user_lookup(%s)", (c["sub"],))
         u = cur.fetchone()
         if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
         status, sv, role_id, mfa_enabled, idp = u
+        if c.get("sid"):
+            cur.execute("SELECT 1 FROM refresh_tokens WHERE family_id=%s AND revoked_at IS NULL LIMIT 1", (c["sid"],))
+            if not cur.fetchone():       # signed out, switched away from, or revoked: the access token dies with its session
+                raise HTTPException(401, "Your session has ended. Sign in again")
         if config.ACCESS_MODEL_V2:
             # New model: the role comes from the membership in the session's tenant (or the platform staff row).
             if c["org"]:
@@ -124,11 +178,14 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         # Two-factor is on for this account, so a password-only session isn't enough (enabling it ends those sessions).
         raise HTTPException(401, "Two-factor verification required")
     return Principal(c["sub"], c["org"], row[2], perms, features, ip, session_id=c.get("sid"), mfa=mfa_used,
-                     mfa_setup=mfa_setup_state(org_requires, row[4], row[5]), alias_names=alias_names)
+                     mfa_setup=mfa_setup_state(org_requires, row[4], row[5]), alias_names=alias_names,
+                     scope=scope, last_mfa_at=c.get("lmfa"))
 
 
 def current_user(p: Principal = Depends(signed_in_user)) -> Principal:
     """A user allowed to use the app: signed in with two-factor, or allowed to skip it for now."""
+    if p.selecting:
+        raise HTTPException(403, "Choose a tenant first")
     if not p.mfa and p.mfa_setup != "optional":
         raise HTTPException(403, SETUP_REQUIRED)
     return p
@@ -143,6 +200,11 @@ def require(*perms: str, feature: str | None = None):
             raise HTTPException(403, "Turn on two-factor authentication to do this")
         if feature and feature not in p.features:
             raise HTTPException(403, "This feature isn't turned on for your organization")
+        stepped = set(perms) & catalogue.STEP_UP_PERMS
+        if stepped and p.mfa and not p.mfa_fresh():
+            # Request check order step 6. (Sessions without a second factor are not asked: they can't answer a challenge.
+            # Phase 6 makes two-factor mandatory for Tenant admins and passkeys for owners.)
+            raise StepUpRequired(sorted(stepped))
         return p
     return dep
 

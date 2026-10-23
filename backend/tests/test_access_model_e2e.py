@@ -8,6 +8,8 @@ import sys
 import psycopg
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from app.security.rbac import install_handlers
+CSRF = {"X-Sentrail-CSRF": "1"}
 from app import config, pg
 from app.access import cache, catalogue as cat
 from app.security import crypto, passwords
@@ -16,8 +18,8 @@ import app.admin_api as api
 
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg)
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
-app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); limiter.enabled = False
-c = TestClient(app, base_url="https://testserver")
+app = FastAPI(); app.state.limiter = limiter; app.include_router(api.router); install_handlers(app); limiter.enabled = False
+c = TestClient(app, headers=CSRF, base_url="https://testserver")
 PW = "violet harbour tram sixteen"
 
 

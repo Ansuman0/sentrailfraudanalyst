@@ -193,18 +193,16 @@ BEGIN
     INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status, last_active_at)
       VALUES (NEW.id, NEW.org_id, NEW.role_id, NEW.status, NEW.last_login_at)
       ON CONFLICT (user_id, tenant_id) DO NOTHING;
+  ELSIF NEW.role_id IS DISTINCT FROM OLD.role_id OR NEW.status IS DISTINCT FROM OLD.status THEN
+    -- A real change of role or status in the old model is copied over (and a missing membership is created).
+    INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status, last_active_at)
+      VALUES (NEW.id, NEW.org_id, NEW.role_id, NEW.status, NEW.last_login_at)
+      ON CONFLICT (user_id, tenant_id) DO UPDATE SET role_id = EXCLUDED.role_id, status = EXCLUDED.status,
+                                                     last_active_at = EXCLUDED.last_active_at;
   ELSE
-    -- Only a real change of role or status is copied over. A login (last_login_at) must never overwrite a membership
-    -- that was edited directly, which is how the new model changes roles.
-    UPDATE tenant_memberships SET
-        role_id = CASE WHEN NEW.role_id IS DISTINCT FROM OLD.role_id THEN NEW.role_id ELSE role_id END,
-        status  = CASE WHEN NEW.status  IS DISTINCT FROM OLD.status  THEN NEW.status  ELSE status  END,
-        last_active_at = NEW.last_login_at
-      WHERE user_id = NEW.id AND tenant_id = NEW.org_id;
-    IF NOT FOUND THEN
-      INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status, last_active_at)
-        VALUES (NEW.id, NEW.org_id, NEW.role_id, NEW.status, NEW.last_login_at);
-    END IF;
+    -- Anything else (a login updates last_login_at) only touches the activity time of a membership that exists. It must never
+    -- change or re-create a membership: memberships are edited and removed directly in the new model.
+    UPDATE tenant_memberships SET last_active_at = NEW.last_login_at WHERE user_id = NEW.id AND tenant_id = NEW.org_id;
   END IF;
   RETURN NULL;
 END $$;

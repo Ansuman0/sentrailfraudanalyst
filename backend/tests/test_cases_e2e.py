@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 os.environ.setdefault("AUTH_MODE", "local")
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
 from fastapi.testclient import TestClient
+from app.security.rbac import install_handlers
+CSRF = {"X-Sentrail-CSRF": "1"}
 
 from app import pg
 from app.main import app
@@ -17,7 +19,7 @@ from app.services import screening, wallet_trace
 
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg)
 limiter.enabled = False
-c = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
+c = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 
 # ---------------- simulated chain + sanctions list ----------------
 CLEAN = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf"
@@ -188,13 +190,13 @@ ok(r.status_code == 200 and s["min_password_len"] == 20 and s["idle_timeout_min"
    "changing one security setting no longer resets the others to defaults")
 
 # ---------------- idle timeout and session length are enforced ----------------
-c5 = TestClient(app, base_url="https://testserver")
+c5 = TestClient(app, headers=CSRF, base_url="https://testserver")
 login("sess1", c5)
 with psycopg.connect(SUPER, autocommit=True) as o:
     o.execute("UPDATE refresh_tokens SET created_at = now() - interval '11 minutes' WHERE user_id=%s AND revoked_at IS NULL",
               (U["sess1"][1],))
 ok(c5.post("/auth/refresh").status_code == 401, "a session idle longer than the organization's timeout (10 min) can't be refreshed")
-c6 = TestClient(app, base_url="https://testserver")
+c6 = TestClient(app, headers=CSRF, base_url="https://testserver")
 login("sess2", c6)
 ok(c6.post("/auth/refresh").status_code == 200, "an active session still refreshes")
 with psycopg.connect(SUPER, autocommit=True) as o:
@@ -203,15 +205,15 @@ with psycopg.connect(SUPER, autocommit=True) as o:
 ok(c6.post("/auth/refresh").status_code == 401, "a session older than the platform maximum (12 h) ends even if active")
 
 # ---------------- sign-in throttling ----------------
-attacker = TestClient(app, base_url="https://testserver", client=("203.0.113.9", 4000))
-for i in range(5):
+attacker = TestClient(app, headers=CSRF, base_url="https://testserver", client=("203.0.113.9", 4000))
+for i in range(10):
     attacker.post("/auth/login", json={"email": "nobody@northwind.ca", "password": f"guess number {i} here"})
     attacker.post("/auth/login", json={"email": U["auditor"][0], "password": f"guess number {i} here"})
 r_unknown = attacker.post("/auth/login", json={"email": "nobody@northwind.ca", "password": "guess again here"})
 r_known = attacker.post("/auth/login", json={"email": U["auditor"][0], "password": PW})
 ok(r_unknown.status_code == r_known.status_code == 429 and r_unknown.json() == r_known.json(),
    "unknown and real emails lock the same way, so a 429 doesn't reveal that an account exists")
-owner = TestClient(app, base_url="https://testserver", client=("198.51.100.20", 4000))
+owner = TestClient(app, headers=CSRF, base_url="https://testserver", client=("198.51.100.20", 4000))
 r = owner.post("/auth/login", json={"email": U["auditor"][0], "password": PW})
 ok(r.status_code == 200, "the real user, from their own network, can still sign in while the attacker is locked out")
 
@@ -238,7 +240,7 @@ def add_password_user(org, role_id, email):
         return str(cur.fetchone()[0])
 add_password_user(nw, nw_roles["Compliance officer"], "nomfa@northwind.ca")
 add_password_user(nw, nw_roles["Tenant admin"], "nomfa.admin@northwind.ca")
-cm = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
+cm = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 r = cm.post("/auth/login", json={"email": "nomfa@northwind.ca", "password": PW})
 ok(r.status_code == 200 and r.json().get("mfa_enabled") is False and "access_token" in r.json(),
    "a user without two-factor signs in with the password and is told two-factor isn't set up")
@@ -256,7 +258,7 @@ ok(r.status_code == 200 and cm.get("/me", headers={"Authorization": "Bearer " + 
    "refreshing a password-only session doesn't upgrade it to a two-factor session")
 NM = {"Authorization": "Bearer " + r.json()["access_token"]}
 
-ca = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
+ca = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 NA = {"Authorization": "Bearer " + ca.post("/auth/login", json={"email": "nomfa.admin@northwind.ca", "password": PW}).json()["access_token"]}
 ok(ca.get("/me", headers=NA).json()["mfa_setup"] == "optional" and ca.get("/admin/users", headers=NA).status_code == 200,
    "nobody is forced: an organization admin without two-factor works normally while the organization hasn't made it mandatory")
@@ -297,7 +299,7 @@ with psycopg.connect(SUPER) as o:
                     (crypto.blind_index("nomfa.admin@northwind.ca"),)).fetchone()
 ok(row == (False, None, True), "db: a user who never turned two-factor on has mfa_enabled=false, no date and no stored secret")
 BIDX = crypto.blind_index("nomfa.admin@northwind.ca")
-cw = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
+cw = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 NW = {"Authorization": "Bearer " + cw.post("/auth/login", json={"email": "nomfa.admin@northwind.ca", "password": PW}).json()["access_token"]}
 sec = cw.post("/me/mfa/setup", headers=NW).json()
 with psycopg.connect(SUPER) as o:
@@ -326,7 +328,7 @@ with psycopg.connect(SUPER, autocommit=True) as o:
     ok(cleared is None, "db: turning it off clears the date")
 
 # ---------------- sign-in by people who aren't (or can't be) signed in ----------------
-cx = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
+cx = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 unknown = cx.post("/auth/login", json={"email": "stranger@nowhere.example", "password": "whatever long enough pw"})
 wrong = cx.post("/auth/login", json={"email": "nomfa.admin@northwind.ca", "password": "not the right password"})
 ok(unknown.status_code == 401 and wrong.status_code == 401 and unknown.json() == wrong.json() == {"detail": "Email or password is incorrect"},
@@ -351,6 +353,6 @@ ok(r.status_code == 401, "a two-factor token for a user that doesn't exist is a 
 stale = _tokens.issue_mfa_pending(uid_susp)
 r = cx.post("/auth/mfa", json={"mfa_token": stale, "code": "123456"})
 ok(r.status_code == 401, "a two-factor token for a user without two-factor is a clean 401, not a crash")
-for _ in range(7):
+for _ in range(11):
     last = cx.post("/auth/login", json={"email": "stranger2@nowhere.example", "password": "whatever long enough pw"})
 ok(last.status_code == 429, "repeated guesses at an unknown email are throttled too")

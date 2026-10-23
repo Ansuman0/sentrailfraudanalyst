@@ -47,6 +47,15 @@ export class ApiError extends Error {
 
 let accessToken: string | null = null;
 let refreshing: Promise<boolean> | null = null;
+let stepUpHandler: (() => Promise<boolean>) | null = null;
+
+/** Header the API requires on cookie-authenticated writes (refresh, sign-out): a cross-site form can't send it. */
+const CSRF_HEADERS = { "X-Sentrail-CSRF": "1" };
+
+/** Registered by the step-up dialog: asks the person for a second factor and resolves true once the API accepted it. */
+export function setStepUpHandler(handler: (() => Promise<boolean>) | null) {
+  stepUpHandler = handler;
+}
 const signedOutListeners = new Set<() => void>();
 
 export function setAccessToken(token: string | null) {
@@ -79,7 +88,7 @@ export function errorMessage(detail: unknown, fallback: string): string {
  */
 export function refreshSession(): Promise<boolean> {
   if (!refreshing) {
-    const send = () => fetch(`${API_BASE_URL}/auth/refresh`, { method: "POST", credentials: "include" });
+    const send = () => fetch(`${API_BASE_URL}/auth/refresh`, { method: "POST", credentials: "include", headers: CSRF_HEADERS });
     const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
     refreshing = (locks ? locks.request("sentrail-refresh", send) : send())
       .then(async (r) => {
@@ -128,11 +137,20 @@ function correlationHeaders(): Record<string, string> {
   return { "X-Request-ID": hex(16), traceparent: `00-${trace}-${hex(8)}-01` };
 }
 
+async function isStepUpRequired(r: Response): Promise<boolean> {
+  try {
+    return ((await r.clone().json()) as { error?: string }).error === "step_up_required";
+  } catch {
+    return false;
+  }
+}
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, query, withCookies = false, retryOn401 = true } = opts;
   const ids = correlationHeaders();            // same ids on the 401 retry: it is the same user action
   const send = () => {
     const headers: Record<string, string> = { ...ids };
+    if (withCookies) Object.assign(headers, CSRF_HEADERS);
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
     return fetch(buildUrl(path, query), {
@@ -149,7 +167,10 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   } catch {
     throw new ApiError(0, "The Sentrail API can't be reached. Check that it is running and try again");
   }
-  if (r.status === 401 && retryOn401 && accessToken !== null) {
+  if (r.status === 401 && (await isStepUpRequired(r))) {
+    // The API wants a fresh second factor for this action: ask once, then repeat the call.
+    if (stepUpHandler && (await stepUpHandler())) r = await send();
+  } else if (r.status === 401 && retryOn401 && accessToken !== null) {
     if (await refreshSession()) {
       r = await send();
     } else {
@@ -159,7 +180,8 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   if (!r.ok) {
     let detail: unknown;
     try {
-      detail = ((await r.json()) as { detail?: unknown }).detail;
+      const b = (await r.json()) as { detail?: unknown; error?: string };
+      detail = b.detail ?? (b.error === "step_up_required" ? "Confirm with your authenticator app to do this." : undefined);
     } catch {
       /* not JSON */
     }

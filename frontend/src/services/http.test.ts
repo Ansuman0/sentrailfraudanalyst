@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, errorMessage, hasAccessToken, onSignedOut, refreshSession, request, resolveApiBase, setAccessToken } from "./http";
+import { ApiError, errorMessage, hasAccessToken, onSignedOut, refreshSession, request, resolveApiBase, setAccessToken, setStepUpHandler } from "./http";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -7,6 +7,7 @@ const json = (status: number, body: unknown) =>
 afterEach(() => {
   vi.unstubAllGlobals();
   setAccessToken(null);
+  setStepUpHandler(null);
 });
 
 describe("refreshSession", () => {
@@ -121,5 +122,59 @@ describe("resolveApiBase", () => {
   it("leaves local development alone", () => {
     expect(resolveApiBase("http://localhost:8000", "localhost", "http://localhost:5173")).toBe("http://localhost:8000");
     expect(resolveApiBase(api, "localhost", "http://localhost:5173")).toBe(api);
+  });
+});
+
+describe("CSRF header", () => {
+  it("is sent on the refresh call and on every call that uses cookies, and on nothing else", async () => {
+    const fetchMock = vi.fn(async () => json(200, { access_token: "t", token_type: "Bearer", expires_in: 600 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await refreshSession();
+    const refreshInit = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect((refreshInit.headers as Record<string, string>)["X-Sentrail-CSRF"]).toBe("1");
+    await request("/auth/logout", { method: "POST", withCookies: true, retryOn401: false });
+    await request("/me");
+    const headersOf = (i: number) => ((fetchMock.mock.calls[i] as unknown as [string, RequestInit])[1].headers as Record<string, string>);
+    expect(headersOf(1)["X-Sentrail-CSRF"]).toBe("1");
+    expect(headersOf(2)["X-Sentrail-CSRF"]).toBeUndefined();
+  });
+});
+
+describe("step-up", () => {
+  const stepUp401 = () => json(401, { error: "step_up_required" });
+
+  it("asks once for a second factor, then repeats the call with the new token", async () => {
+    setAccessToken("old");
+    let calls = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls += 1;
+      const auth = (init?.headers as Record<string, string>)["Authorization"];
+      return auth === "Bearer fresh" ? json(200, { ok: true }) : stepUp401();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const handler = vi.fn(async () => {
+      setAccessToken("fresh");
+      return true;
+    });
+    setStepUpHandler(handler);
+    expect(await request<{ ok: boolean }>("/policy", { method: "PUT", body: {} })).toEqual({ ok: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/auth/refresh"))).toBe(false); // not mistaken for an expired session
+  });
+
+  it("gives up with a clear message when the person cancels", async () => {
+    setAccessToken("old");
+    vi.stubGlobal("fetch", vi.fn(async () => stepUp401()));
+    setStepUpHandler(async () => false);
+    await expect(request("/policy", { method: "PUT", body: {} })).rejects.toMatchObject({
+      status: 401, message: "Confirm with your authenticator app to do this.",
+    });
+  });
+
+  it("does nothing special when no dialog is registered", async () => {
+    setAccessToken("old");
+    vi.stubGlobal("fetch", vi.fn(async () => stepUp401()));
+    await expect(request("/policy", { method: "PUT", body: {} })).rejects.toBeInstanceOf(ApiError);
   });
 });

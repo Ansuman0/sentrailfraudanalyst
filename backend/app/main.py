@@ -17,6 +17,7 @@ from app.detection import rules, scorer
 from app.admin_api import router as admin_router
 from app.security.rbac import Principal, require, api_key
 from app.security.middleware import SecurityHeaders, limiter, api_key_or_ip
+from app.security.rbac import install_handlers
 from app.logging_config import configure_logging
 
 app = FastAPI(title="Sentrail", version="0.3",
@@ -26,9 +27,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SecurityHeaders)
 app.add_middleware(CORSMiddleware, allow_origins=[os.environ.get("APP_URL", "http://localhost:5173")],
                    allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-                   allow_headers=["Authorization", "Content-Type", "X-Request-ID", "traceparent"],
+                   allow_headers=["Authorization", "Content-Type", "X-Request-ID", "traceparent", "X-Sentrail-CSRF"],
                    expose_headers=["X-Request-ID"])
 app.include_router(admin_router)
+install_handlers(app)
 configure_logging()
 
 

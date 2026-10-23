@@ -84,3 +84,48 @@ and can add a passkey. Because of this, `TRUST_IDP_MFA=true` by default. If you 
 Realm import fields change between Keycloak versions. After a first start, confirm in the Keycloak
 console that brute-force protection, the password policy, OTP policy and both clients match the
 file. The compose file pins Keycloak 26.0; update the tag deliberately.
+
+## Sign-in and sessions (access model v2, phase 2)
+
+One `POST /auth/login` serves everybody; a successful sign-in answers with `route`:
+
+| route | meaning (with `ACCESS_MODEL_V2` on) |
+|---|---|
+| `console` | platform staff (including owners) land in the platform console and can "enter" a tenant they are a member of |
+| `tenant` | exactly one active membership: straight into that tenant |
+| `picker` | several memberships: a session with **no tenant yet** (`scp = select`) that can only call `/me`, `/me/tenants` and `/session/*` |
+| `no_access` | no membership and no platform role (the same limited session, with nothing to choose) |
+
+With the flag off the route is `tenant` (the user's organization) or `console`, as before. `GET /me/tenants` lists the places a person can work;
+`POST /session/tenant {tenant_id | null}` moves to another tenant (null = console) by ending the current session and starting a new one (new
+session id, audited in both tenants' logs, `auth.tenant_switch`). Switching needs the flag; the old model has exactly one tenant per user.
+
+**Access token claims:** `sub` user, `org`/`tid` active tenant (null in the console), `rid` role, `prid` platform role, `asid` access session
+(phase 5), `sv` session version, `lmfa` time of the last second-factor check (epoch s), `scp` tenant | platform | select, `sid` session id.
+A session is a refresh-token family bound to one tenant (`refresh_tokens.tenant_id/scope/last_mfa_at`); every request checks that the family is
+still live, so signing out or switching ends the old access tokens at once, not after their 10 minutes.
+
+**Request check order** (rbac): authenticated and current `session_version` -> tenant status (`active`/`trial` only) -> active membership
+(flag on) -> permission -> plan feature -> step-up -> rate limits -> row-level security.
+
+**Step-up.** Permissions flagged in the catalogue (`str.approve`, `screening.override`, `policy.edit`, `data.export`, `audit.export`,
+`security.manage`, `apikeys.manage`, `platform.tenants.delete`, `platform.tenant.access`, `platform.owners.manage`, `platform.security.manage`) need
+a second factor proved within `STEP_UP_WINDOW_MINUTES` (default 10). Otherwise the API answers **401 `{"error": "step_up_required"}`**; the web app
+asks for a code, calls `POST /session/step-up {code | recovery_code}` and repeats the action. Refreshing a session never refreshes the step-up
+clock. Sessions without a second factor are not challenged (they cannot answer); two-factor becomes mandatory for Tenant admins and
+passkeys for owners in phase 6.
+
+**Credential protection.** 10 failures in 15 minutes lock an (account, IP) pair for 15 minutes (`auth.locked`); every further failure on the
+account answers slower (progressive delay, 0.25 s steps up to 1 s, `LOGIN_DELAY_STEP`); failures from all networks together lock the account for
+everyone only at 50, so guessing from one network cannot lock the real owner out. Unknown emails are counted identically.
+
+**Session hardening.** Cookies `sentrail_rt` (refresh) and `sentrail_dv` (device) are HttpOnly, Secure, SameSite=Strict, path `/auth`. Cookie-authenticated
+writes (`/auth/refresh`, `/auth/logout`) need the header `X-Sentrail-CSRF: 1` and, when the browser sends an `Origin`, it must be the app (or the host
+the API was reached on). A new session id starts at every sign-in and tenant switch. Idle and absolute timeouts are unchanged (tenant idle timeout,
+platform maximum session hours).
+
+**Notifications** (`app/services/notify.py`): new-device sign-in (device cookie not seen before, and the person has signed in before),
+two-factor turned on or reset, role changed (and password changed, when a password-change route exists). Sent over SMTP when `SMTP_HOST` is set,
+otherwise logged with a masked address. They never carry secrets.
+
+**Audit actions:** `auth.signin`, `auth.signin_failed`, `auth.locked`, `auth.tenant_switch`, `auth.step_up`, `auth.step_up_failed`, `auth.signout`.

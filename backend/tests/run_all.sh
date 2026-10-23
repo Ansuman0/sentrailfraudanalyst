@@ -18,7 +18,7 @@ if [ -z "$PYTHON" ]; then
 fi
 OUT=${TMPDIR:-/tmp}
 export SUPERUSER_DATABASE_URL="$PG_SUPERUSER_URL/$TEST_DB"     # tests use it to inspect raw rows
-export PYTHONPATH=$(pwd) ENV=dev
+export PYTHONPATH=$(pwd) ENV=dev LOGIN_DELAY_STEP=${LOGIN_DELAY_STEP:-0}   # no real sleeping in tests (the delay has its own check)
 export DATABASE_URL="postgresql://sentrail_app:${APP_DB_PASSWORD}@127.0.0.1:5432/$TEST_DB"
 eval "$($PYTHON -m scripts.generate_keys | sed 's/^/export /')"
 fresh() {
@@ -51,7 +51,7 @@ OWNER_PASSWORD="$OWNER_PASSWORD" $PYTHON tests/test_access_model_migration.py > 
 echo "== access_migration"; echo "$(grep -c '^PASS' "$OUT/sentrail_access_migration.full") passed"
 grep '^FAIL' "$OUT/sentrail_access_migration.full" && status=1
 grep -q Traceback "$OUT/sentrail_access_migration.full" && { tail -5 "$OUT/sentrail_access_migration.full"; status=1; }
-for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local" "access_model_e2e local"; do
+for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local" "access_model_e2e local" "signin_session_e2e local"; do
   set -- $t; fresh; echo "== $1"
   AUTH_MODE=$2 $PYTHON tests/test_$1.py > "$OUT/sentrail_$1.full" 2>&1 || status=1
   echo "$(grep -c '^PASS' "$OUT/sentrail_$1.full") passed"

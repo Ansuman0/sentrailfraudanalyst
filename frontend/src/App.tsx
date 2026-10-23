@@ -1,11 +1,13 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth, RequirePerm } from "./components/RequireAuth";
+import { StepUpProvider } from "./components/StepUp";
 import { useAuth } from "./hooks/useAuth";
 import { Account } from "./pages/Account";
 import { Alerts } from "./pages/Alerts";
 import { ApiKeys } from "./pages/ApiKeys";
 import { Audit } from "./pages/Audit";
+import { ChooseTenant, NoAccess } from "./pages/ChooseTenant";
 import { CaseView } from "./pages/CaseView";
 import { Features } from "./pages/Features";
 import { Join } from "./pages/Join";
@@ -35,11 +37,14 @@ function Home() {
 export function App() {
   const { can, canAny, hasFeature } = useAuth();
   return (
+    <StepUpProvider>
     <Routes>
       <Route path="/signin" element={<SignIn />} />
       <Route path="/signed-out" element={<SignedOut />} />
       <Route path="/join" element={<Join />} />
       <Route path="/setup-2fa" element={<RequireAuth><TwoFactorSetup /></RequireAuth>} />
+      <Route path="/choose-tenant" element={<RequireAuth><ChooseTenant /></RequireAuth>} />
+      <Route path="/no-access" element={<RequireAuth><NoAccess /></RequireAuth>} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route index element={<Home />} />
         <Route path="alerts" element={<RequirePerm allowed={can("cases.view") && hasFeature("alerts")}><Alerts /></RequirePerm>} />
@@ -61,5 +66,6 @@ export function App() {
         <Route path="*" element={<><h1>Page not found</h1><p className="sub">That address doesn't match any screen.</p></>} />
       </Route>
     </Routes>
+    </StepUpProvider>
   );
 }

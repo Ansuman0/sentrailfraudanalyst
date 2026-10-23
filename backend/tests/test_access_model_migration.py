@@ -211,7 +211,20 @@ with psycopg.connect(OWNER_URL, autocommit=True) as oc:
     ok(cat.sync(oc)["owner_added"] == 1, "sync gives the Platform owner a missing platform permission back")
     ok(q("SELECT session_version FROM users WHERE id=%s", people["platform:owner"])[0][0] == sv + 1, "and ends the owner's sessions so they reload")
 
+# ---- migration 010 (sessions and devices) ----
+ok(q("SELECT count(*) FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name IN ('last_mfa_at','tenant_id','scope')")[0][0] == 3,
+   "010 adds last_mfa_at, tenant_id and scope to refresh_tokens")
+ok(q("SELECT to_regclass('user_devices') IS NOT NULL")[0][0], "010 adds user_devices")
+m = q("SELECT tenant_name, role_name, status FROM membership_lookup(%s)", people["Northwind:Compliance officer"])
+ok(m == [("Northwind", "Compliance officer", "active")], "membership_lookup answers without a tenant context")
+ok(q("SELECT role_name FROM platform_staff_lookup(%s)", people["platform:admin"])[0][0] == cat.PLATFORM_OWNER, "platform_staff_lookup answers for platform users")
+ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["platform:owner"])[0][0] == "active", "session_user_lookup answers for any user")
+
 # ---- down ----
+r = migrate("--down")
+ok(r.returncode == 0 and "reverted 010_sessions_and_devices.sql" in r.stdout, "migration 010 reverts first")
+ok(q("SELECT to_regclass('user_devices') IS NULL")[0][0] and q("SELECT count(*) FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='scope'")[0][0] == 0,
+   "010's table and columns are gone")
 r = migrate("--down")
 ok(r.returncode == 0 and "reverted 009_access_model_v2.sql" in r.stdout, "migration 009 reverts")
 back = effective()
@@ -230,7 +243,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout, "migration 009 applies again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout, "migrations 009 and 010 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),
