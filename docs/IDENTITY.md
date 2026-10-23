@@ -174,3 +174,30 @@ Background jobs register in `app/access/jobs.py` and join the isolation run (the
 | Replace a lost admin | `POST /platform/orgs/{id}/admin {email, reason}` | an existing member is promoted, anyone else invited for 72 hours; the reason is written to the tenant's log and the platform's (`tenant_admin_assigned`). |
 
 Approvals (`GET /platform/approvals`) are the generic second-owner mechanism; phase 5 adds owner changes and loosening the security baseline to it.
+
+## Owner access, approvals and break-glass (access model v2, phase 5)
+
+**A Platform owner reaches a tenant's data only through an access session.** `POST /platform/orgs/{id}/access {reason}` (needs `platform.tenant.access`, a
+step-up permission) follows the tenant's own setting, which its Tenant admins change under Security settings (`owner_access`, needs `security.manage`):
+
+| Setting | What happens |
+|---|---|
+| `allow` (default) | the session starts at once |
+| `require_approval` | a request waits up to 24 hours; one of the tenant's own Tenant admins approves or denies it (`GET /admin/access-requests`, `POST .../approve`, `.../deny`) |
+| `deny` | refused, unless a **second owner** approved a recorded legal hold (`POST /platform/orgs/{id}/legal-hold`, approval flow below); the session is then flagged `legal_hold` |
+
+A session lasts 60 minutes and can be extended once (`POST /platform/access/{id}/extend`); `DELETE /platform/access/{id}` (the owner or a colleague),
+`DELETE /me/access-session` (from inside) and `DELETE /admin/access-requests/{id}` (the tenant) end it early. The owner then enters with
+`POST /session/tenant {tenant_id}`: the token carries `asid`, and **every request re-checks the session is live** (when it expires, the next request answers
+401 and the end is recorded). Inside, the owner acts with Tenant admin rights; they cannot approve an STR they drafted, change the tenant's `owner_access` setting
+or decide on access requests. Every audit event they cause carries `access_session_id` in the tenant's log **and** is mirrored into the platform's (`tenant_action`).
+Tenant admins are emailed when a session is requested, starts and ends; the web app shows a persistent banner with an "End access" button. Until the job runner
+exists (phase 7), expired sessions are closed (and announced) the next time anyone touches access.
+
+**Second-owner approvals** (`GET /platform/approvals`, `POST .../approve`, `.../deny`; the requester can never approve; requests expire after 24 hours):
+deleting a tenant, placing or lifting a legal hold, adding an owner, changing, demoting or suspending an owner, and **loosening** the platform security baseline
+(tightening applies at once). Nothing is applied until the second owner approves.
+
+**Break-glass.** Exactly one sealed Platform owner account (`python -m scripts.create_break_glass`, database-enforced single account, platform only). Using it alerts every
+other owner (email + `break_glass_used` in the platform log) and sets `must_rotate`: until its password is changed (`POST /me/password`) nothing else works. Changing a password
+(`POST /me/password`, any user) ends all their sessions, issues a fresh one, and notifies them.

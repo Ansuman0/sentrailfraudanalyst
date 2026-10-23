@@ -5,6 +5,8 @@ a developer machine. Backend: 160 checks, frontend: 23 tests, all passing. See [
 
 ## Changed
 
+- **Platform owner access (access model v2, in progress, not released)**: a platform owner can only enter an organization through a time-limited session (60 minutes, one extension) that the organization controls (allow, ask first, or never, except under a recorded legal hold); everything they do is logged in the organization's audit log and the platform's, administrators are told, and a banner stays visible. Adding or suspending an owner, deleting an organization and loosening the security baseline now need a second owner. The sealed break-glass account alerts every owner when used and must change its password at once. Anyone can change their own password. See [docs/IDENTITY.md](docs/IDENTITY.md).
+
 - **Tenant lifecycle (access model v2, in progress, not released)**: a new organization starts pending and goes live when its first admin accepts the 72-hour invitation (and sets up two-factor); platform owners can suspend and reactivate it, delete it only with a second owner's approval, and appoint a replacement admin; plans now enforce their seat limits. See [docs/IDENTITY.md](docs/IDENTITY.md).
 
 - **Isolation and need-to-know (access model v2, in progress, not released)**: the database itself now refuses a person who has lost their membership; a case can be marked restricted so only people with restricted-case access or named on it can open it; case and STR views are audited; the Tenant admin role is read-only on the roles screen; "Reveal email", security settings and API keys have their own permissions. See [docs/IDENTITY.md](docs/IDENTITY.md).

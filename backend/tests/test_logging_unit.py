@@ -103,7 +103,7 @@ class Cur:
     n = 0
     def fetchone(self):
         self.n += 1
-        return None if self.n == 1 else (__import__("datetime").datetime(2026, 1, 1),)   # no previous event, then now()
+        return None if self.n <= 2 else (__import__("datetime").datetime(2026, 1, 1),)   # no access session, no previous event, then now()
 import uuid
 org, usr = uuid.uuid4(), uuid.uuid4()
 audit.write(Cur(), org, usr, None, "login_failed", None, {"failed": 3}, "203.0.113.9")

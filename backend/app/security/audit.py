@@ -25,8 +25,20 @@ def chain_hash(prev: bytes, payload: bytes) -> bytes:
 log = logging.getLogger("sentrail.audit")
 
 
+def _mirror(org_id, actor_id, actor_role, action, target, ip, session_id):
+    """An owner acting inside a tenant leaves a trace in the PLATFORM log as well (its own transaction and chain)."""
+    from app import pg
+    with pg.tx(platform=True) as cur2:
+        write(cur2, None, actor_id, actor_role, "tenant_action", target,
+              {"tenant": str(org_id), "action": action, "access_session_id": session_id}, ip)
+
+
 def write(cur, org_id, actor_id, actor_role, action, target=None, detail=None, ip=None):
     detail = detail or {}
+    cur.execute("SELECT current_setting('app.access_session', true)")
+    session_id = (cur.fetchone() or [""])[0] or None
+    if session_id and org_id is not None:
+        detail = {**detail, "access_session_id": session_id}
     lock_key = int.from_bytes(hashlib.sha256(str(org_id).encode()).digest()[:8], "big", signed=True)
     cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
     cur.execute("SELECT hash FROM audit_events WHERE org_id IS NOT DISTINCT FROM %s ORDER BY seq DESC LIMIT 1", (org_id,))
@@ -38,6 +50,8 @@ def write(cur, org_id, actor_id, actor_role, action, target=None, detail=None, i
     cur.execute("""INSERT INTO audit_events (org_id, at, actor_id, actor_role, action, target, detail, ip, prev_hash, hash)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (org_id, at, actor_id, actor_role, action, target, json.dumps(detail, default=str), ip, prev, h))
+    if session_id and org_id is not None:
+        _mirror(org_id, actor_id, actor_role, action, target, ip, session_id)
     # Operational copy of the business event (login, login_failed, mfa_failed, ...): ids only, no detail or ip.
     log.info("audit event", extra={"event": "audit_" + action, "org_id": org_id, "user_id": actor_id})
 

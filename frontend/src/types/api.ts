@@ -28,6 +28,10 @@ export interface Me {
   /** "tenant" | "platform" | "select" (signed in, tenant not chosen yet: `tenant` is null and there are no permissions). */
   scope?: "tenant" | "platform" | "select";
   selecting?: boolean;
+  /** A platform owner working inside this tenant through a time-limited access session (shown as a banner). */
+  access_session?: { id: string; expires_at: string; reason: string; extended: boolean } | null;
+  /** The break-glass account was just used: the password has to be changed before anything else. */
+  must_rotate?: boolean;
   /** Where this person can work (access model v2). The header offers a switcher when there is more than one. */
   tenants?: TenantChoice[];
 }

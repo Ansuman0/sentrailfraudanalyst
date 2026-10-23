@@ -38,6 +38,8 @@ class Principal:
     mfa_setup: str | None = None    # "required" | "optional" while the user has no 2FA; None once it's on
     alias_names: set = field(default_factory=set)   # old permission names this user holds only through a renamed permission
     scope: str = "tenant"           # "tenant" | "platform" | "select" (signed in, tenant not chosen yet)
+    access_session_id: str | None = None   # a platform owner working inside a tenant through an access session
+    must_rotate: bool = False       # the break-glass account was just used: the password has to be changed first
     selecting: bool = False         # scope == "select": only /me, /me/tenants and /session/* are available
     last_mfa_at: int | None = None  # epoch seconds of the last second-factor check in this session (step-up)
 
@@ -64,6 +66,10 @@ class Principal:
 
 # How recently a second factor must have been proved for the permissions marked "step-up" in the catalogue.
 STEP_UP_WINDOW_SECONDS = int(os.environ.get("STEP_UP_WINDOW_MINUTES", "10")) * 60
+
+
+# Set by app/owner_access.py: ends an expired access session (audit, notify the tenant's admins). Called when a request meets one.
+access_session_ended_hook = None
 
 
 class StepUpRequired(Exception):
@@ -136,13 +142,26 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
         status, sv, role_id, mfa_enabled, idp = u
-        cur.execute("SELECT mfa_mandatory FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
-        mandatory = bool((cur.fetchone() or [False])[0])
+        cur.execute("SELECT mfa_mandatory, must_rotate FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
+        own = cur.fetchone() or (False, False)
+        mandatory, must_rotate = bool(own[0]), bool(own[1])
+        asid = c.get("asid")
+        if asid:
+            # An owner inside a tenant: the access session must still be live, and the owner acts with Tenant admin rights.
+            cur.execute("""SELECT 1 FROM tenant_access_sessions WHERE id=%s AND owner_user_id=%s AND tenant_id=%s
+                           AND status='active' AND expires_at > now()""", (asid, c["sub"], c["org"]))
+            if not cur.fetchone():
+                if access_session_ended_hook:
+                    access_session_ended_hook(asid)
+                raise HTTPException(401, "Your access session in this tenant has ended")
         if c.get("sid"):
             cur.execute("SELECT 1 FROM refresh_tokens WHERE family_id=%s AND revoked_at IS NULL LIMIT 1", (c["sid"],))
             if not cur.fetchone():       # signed out, switched away from, or revoked: the access token dies with its session
                 raise HTTPException(401, "Your session has ended. Sign in again")
-        if config.ACCESS_MODEL_V2:
+        if asid:
+            cur.execute("SELECT id FROM roles WHERE org_id=%s AND is_locked", (c["org"],))
+            role_id = cur.fetchone()[0]
+        elif config.ACCESS_MODEL_V2:
             # New model: the role comes from the membership in the session's tenant (or the platform staff row).
             if c["org"]:
                 cur.execute("SELECT role_id, status FROM tenant_memberships WHERE user_id=%s AND tenant_id=%s", (c["sub"], c["org"]))
@@ -192,13 +211,18 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         raise HTTPException(401, "Two-factor verification required")
     return Principal(c["sub"], c["org"], row[2], perms, features, ip, session_id=c.get("sid"), mfa=mfa_used,
                      mfa_setup=mfa_setup_state(org_requires, row[4], row[5]), alias_names=alias_names,
-                     scope=scope, last_mfa_at=c.get("lmfa"))
+                     scope=scope, last_mfa_at=c.get("lmfa"), access_session_id=asid, must_rotate=must_rotate)
+
+
+ROTATE_MESSAGE = "This sign-in must change its password first (POST /me/password)"
 
 
 def current_user(p: Principal = Depends(signed_in_user)) -> Principal:
     """A user allowed to use the app: signed in with two-factor, or allowed to skip it for now."""
     if p.selecting:
         raise HTTPException(403, "Choose a tenant first")
+    if p.must_rotate:
+        raise HTTPException(403, ROTATE_MESSAGE)
     if not p.mfa and p.mfa_setup != "optional":
         raise HTTPException(403, SETUP_REQUIRED)
     return p

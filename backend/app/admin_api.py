@@ -141,10 +141,11 @@ def login(request: Request, response: Response, body: Login):
     error = None
     result = None
     notice = None
+    break_glass = False
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, role_id, session_version, email_enc
+        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, role_id, session_version, email_enc, break_glass
                        FROM users WHERE id=%s FOR UPDATE""", (uid,))
-        pw_hash, status, failed, mfa_enabled, role_id, sv, email_enc = cur.fetchone()
+        pw_hash, status, failed, mfa_enabled, role_id, sv, email_enc, break_glass = cur.fetchone()
         if not passwords.verify_password(pw_hash, body.password) or status != "active":
             failed += 1
             cur.execute("UPDATE users SET failed_logins=%s WHERE id=%s", (failed, uid))
@@ -155,6 +156,8 @@ def login(request: Request, response: Response, body: Login):
                 cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (passwords.hash_password(body.password), uid))
             cur.execute("UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=%s", (uid,))
             _require_open_tenant(uid, org)
+            if break_glass:
+                _break_glass_used(cur, uid, request)
             if not mfa_enabled:
                 # No two-factor yet: a password-only session. The API limits it (rbac.current_user) until the
                 # user sets two-factor up, or, where the organization allows it, chooses to skip it.
@@ -171,6 +174,8 @@ def login(request: Request, response: Response, body: Login):
         _progressive_delay(failed_total)
         raise error
     _throttle_clear(bidx, ip)
+    if break_glass:
+        _alert_owners(uid, request)
     if notice:
         notify.security_event(*notice)
     if result:
@@ -202,7 +207,7 @@ def _session_limits(cur, org) -> tuple[int, int]:
 
 
 def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="password+totp", mfa=True,
-           scope=None, last_mfa_at=_UNSET):
+           scope=None, last_mfa_at=_UNSET, access_session_id=None):
     """Start or renew a session: a refresh token (cookie) in family `family` and a short access token.
     The session is bound to one active tenant (org; None for the console or while choosing). last_mfa_at defaults to now when this
     sign-in used a second factor; a refresh passes the stored value so renewing a session never refreshes the step-up clock."""
@@ -214,14 +219,14 @@ def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="p
     raw = tokens.new_opaque()
     family = family or uuid.uuid4()
     cur.execute("""INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at, user_agent, ip, auth_method,
-                                               last_mfa_at, tenant_id, scope)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                               last_mfa_at, tenant_id, scope, access_session_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (uid, family, crypto.sha256(raw), tokens.refresh_expiry(),
-                 request.headers.get("user-agent", "")[:200], client_ip(request), method, last_mfa_at, org, scope))
+                 request.headers.get("user-agent", "")[:200], client_ip(request), method, last_mfa_at, org, scope, access_session_id))
     _set_refresh(response, raw)
     ttl = min(tokens.ACCESS_TTL, timedelta(minutes=idle))
     return {"access_token": tokens.issue_access(uid, org, role_id, sv, mfa=mfa, ttl=ttl, session_id=family, scope=scope,
-                                                last_mfa_at=last_mfa_at),
+                                                last_mfa_at=last_mfa_at, access_session_id=access_session_id),
             "token_type": "Bearer",
             "expires_in": int(ttl.total_seconds())}
 
@@ -367,12 +372,12 @@ def refresh(request: Request, response: Response, sentrail_rt: str | None = Cook
     with pg.tx(platform=True) as cur:
         cur.execute("""SELECT t.id, t.user_id, t.family_id, t.expires_at, t.revoked_at, t.created_at,
                               (SELECT min(created_at) FROM refresh_tokens f WHERE f.family_id=t.family_id), t.auth_method,
-                              t.tenant_id, t.scope, t.last_mfa_at
+                              t.tenant_id, t.scope, t.last_mfa_at, t.access_session_id
                        FROM refresh_tokens t WHERE t.token_hash=%s FOR UPDATE""", (h,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(401, "Sign in again")
-        tid, uid, fam, exp, revoked, last_active, started, method, tenant, scope, lmfa = row
+        tid, uid, fam, exp, revoked, last_active, started, method, tenant, scope, lmfa, asid = row
         if revoked:   # reuse of a rotated token: assume theft, end every session in this family
             cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE family_id=%s AND revoked_at IS NULL", (fam,))
             error = "reuse"
@@ -390,7 +395,10 @@ def refresh(request: Request, response: Response, sentrail_rt: str | None = Cook
                     c2.execute("SELECT status, session_version, role_id FROM session_user_lookup(%s)", (uid,))
                     u = c2.fetchone()
                 access_ok = bool(u and u[0] == "active")
-                if access_ok and config.ACCESS_MODEL_V2 and scope != "select":
+                if access_ok and asid:       # an owner inside a tenant: the access session must still be live
+                    cur.execute("""SELECT 1 FROM tenant_access_sessions WHERE id=%s AND status='active' AND expires_at > now()""", (asid,))
+                    access_ok = cur.fetchone() is not None
+                elif access_ok and config.ACCESS_MODEL_V2 and scope != "select":
                     staff, mems = _memberships(uid)
                     access_ok = not ((scope == "platform" and not staff) or (scope == "tenant" and tenant not in [m[0] for m in mems]))
                 if not access_ok:
@@ -401,7 +409,8 @@ def refresh(request: Request, response: Response, sentrail_rt: str | None = Cook
                     # same assurance as the original sign-in: a password-only session stays password-only, and renewing a
                     # session never refreshes its step-up clock (last_mfa_at is carried over as it was)
                     result = _issue(cur, response, uid, tenant, u[2], u[1], request, family=fam,
-                                    method=method or "password+totp", mfa=method != "password", scope=scope, last_mfa_at=lmfa)
+                                    method=method or "password+totp", mfa=method != "password", scope=scope, last_mfa_at=lmfa,
+                                    access_session_id=asid)
     if error:
         if error == "reuse":
             with pg.tx(tenant, platform=tenant is None) as cur:
@@ -636,9 +645,11 @@ def list_orgs(p: Principal = Depends(require_any("platform.tenants.manage", "pla
     with pg.tx(platform=True) as cur:
         cur.execute("""SELECT o.id, o.legal_name, o.business_type, o.registration, o.data_region, o.plan, o.status,
                               (SELECT count(*) FROM users u WHERE u.org_id=o.id),
-                              (SELECT array_agg(feature) FROM org_features f WHERE f.org_id=o.id AND f.in_plan)
+                              (SELECT array_agg(feature) FROM org_features f WHERE f.org_id=o.id AND f.in_plan),
+                              o.owner_access, o.legal_hold, o.slug
                        FROM organizations o ORDER BY o.created_at""")
-        cols = ["id", "legal_name", "business_type", "registration", "data_region", "plan", "status", "users", "features"]
+        cols = ["id", "legal_name", "business_type", "registration", "data_region", "plan", "status", "users", "features",
+                "owner_access", "legal_hold", "slug"]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
@@ -718,7 +729,7 @@ def _require_seat(cur, org):
 @router.post("/admin/invitations")
 @limiter.limit("30/hour")
 def invite(request: Request, body: InviteIn, p: Principal = Depends(require("users.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         _require_seat(cur, p.org_id)
         role = _role_in_org(cur, body.role_id, p.org_id)
         _no_escalation(cur, p, body.role_id)
@@ -802,6 +813,59 @@ def accept(request: Request, body: AcceptIn):
                     if first_admin else "Sign in with your email and new password"}
 
 
+class PasswordIn(BaseModel):
+    current_password: str = Field(max_length=256)
+    new_password: str = Field(max_length=256)
+
+
+@router.post("/me/password")
+@limiter.limit("10/minute")
+def change_password(request: Request, response: Response, body: PasswordIn, p: Principal = Depends(signed_in_user)):
+    """Change your own password. Every session of yours ends (including the break-glass rotation lock) and you get a fresh one."""
+    home = _org_of(p.user_id)
+    notice = None
+    with pg.tx(home, platform=home is None, actor=p.user_id) as cur:
+        cur.execute("""SELECT password_hash, role_id, session_version, email_enc, auth_method FROM users WHERE id=%s FOR UPDATE""", (p.user_id,))
+        pw_hash, role_id, sv, email_enc, method = cur.fetchone()
+        if method == "keycloak":
+            raise HTTPException(409, "Your sign-in provider manages your password")
+        if not passwords.verify_password(pw_hash, body.current_password):
+            raise HTTPException(401, "The current password isn't right")
+        if home is None:
+            cur.execute("SELECT min_password_len_floor FROM platform_settings")
+        else:
+            cur.execute("SELECT min_password_len FROM security_settings WHERE org_id=%s", (home,))
+        email = crypto.decrypt(email_enc, home, "email")
+        problems = passwords.check_policy(body.new_password, cur.fetchone()[0], [email.split("@")[0]])
+        if body.new_password == body.current_password:
+            problems.append("Choose a password you haven't used just now")
+        if problems:
+            raise HTTPException(422, problems)
+        cur.execute("""UPDATE users SET password_hash=%s, password_changed_at=now(), must_rotate=false,
+                       session_version=session_version+1 WHERE id=%s""", (passwords.hash_password(body.new_password), p.user_id))
+        cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (p.user_id,))
+        audit.write(cur, home, p.user_id, None, "auth.password_changed", None, {}, client_ip(request))
+        session = _issue(cur, response, p.user_id, p.org_id, role_id, sv + 1, request, scope=p.scope,
+                         method="password+totp" if p.mfa else "password", mfa=p.mfa)
+        notice = (email, "password_changed", None)
+    notify.security_event(*notice)
+    return session
+
+
+def _break_glass_used(cur, uid, request):
+    """The sealed account was just used: its password must be rotated, and every owner is told."""
+    cur.execute("UPDATE users SET must_rotate=true WHERE id=%s", (uid,))
+    audit.write(cur, None, uid, "Platform owner", "break_glass_used", None, {"ip": client_ip(request)}, client_ip(request))
+
+
+def _alert_owners(uid, request):
+    with pg.tx(platform=True) as cur:
+        cur.execute("""SELECT email_enc FROM users WHERE org_id IS NULL AND role_id=%s AND status='active' AND id<>%s""", (PLATFORM_OWNER_ROLE, uid))
+        addresses = [crypto.decrypt(r[0], None, "email") for r in cur.fetchall()]
+    for address in addresses:
+        notify.security_event(address, "break_glass_used", {"where": f"from {client_ip(request) or 'an unknown address'}"})
+
+
 # =====================================================================
 # Two-factor setup for the signed-in user (also from a password-only session)
 # =====================================================================
@@ -823,7 +887,7 @@ def _local_user(cur, p: Principal):
 @limiter.limit("10/minute")
 def mfa_setup(request: Request, p: Principal = Depends(signed_in_user)):
     """Start TOTP setup: a new secret, kept unconfirmed until /me/mfa/confirm. Calling it again replaces it."""
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         email = crypto.decrypt(_local_user(cur, p), p.org_id, "email")
         secret = mfa.new_secret()
         cur.execute("UPDATE users SET totp_secret_enc=%s, totp_last_step=0 WHERE id=%s",
@@ -837,7 +901,7 @@ def mfa_setup(request: Request, p: Principal = Depends(signed_in_user)):
 def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Principal = Depends(signed_in_user)):
     """Turn two-factor on. Ends every session of this user (they were password-only) and starts a new,
     two-factor session for this device. Returns single-use recovery codes, shown once."""
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         email_enc = _local_user(cur, p)
         cur.execute("SELECT totp_secret_enc, totp_last_step, role_id, session_version FROM users WHERE id=%s", (p.user_id,))
         enc, last, role_id, sv = cur.fetchone()
@@ -866,7 +930,7 @@ def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Princ
 # =====================================================================
 @router.get("/admin/users")
 def list_users(p: Principal = Depends(require("users.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT u.id, u.name_enc, u.email_enc, r.name, u.status, u.mfa_enabled, u.last_login_at, u.mfa_enabled_at
                        FROM users u JOIN roles r ON r.id=u.role_id ORDER BY u.created_at""")
         rows = cur.fetchall()
@@ -882,7 +946,7 @@ class Reason(BaseModel):
 
 @router.post("/admin/users/{uid}/reveal-email")
 def reveal(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("users.pii.reveal"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT email_enc FROM users WHERE id=%s", (uid,))
         r = cur.fetchone()
         if not r:
@@ -901,7 +965,7 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
     if str(uid) == p.user_id:
         raise HTTPException(403, "You can't change your own role or status. Ask another admin")
     role_notice = None
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", (uid,))
         cur_role = cur.fetchone()
         if not cur_role:
@@ -943,7 +1007,7 @@ def reset_mfa(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("user
     if str(uid) == p.user_id:
         raise HTTPException(403, "Ask another admin to reset your two-factor")
     if AUTH_MODE == "keycloak":
-        with pg.tx(p.org_id, actor=p.actor) as cur:
+        with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
             cur.execute("UPDATE users SET session_version=session_version+1 WHERE id=%s RETURNING idp_subject", (uid,))
             r = cur.fetchone()
             if not r:
@@ -953,7 +1017,7 @@ def reset_mfa(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("user
             kc().reset_second_factor(r[0])
             _audit(cur, p, "mfa_reset", str(uid), {"reason": body.reason, "via": "keycloak"})
         return {"ok": True}
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""UPDATE users SET totp_secret_enc=NULL, mfa_enabled=false, totp_last_step=0,
                        session_version=session_version+1 WHERE id=%s RETURNING email_enc""", (uid,))
         gone = cur.fetchone()
@@ -972,7 +1036,7 @@ def reset_mfa(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("user
 # =====================================================================
 @router.get("/admin/roles")
 def list_roles(p: Principal = Depends(require("roles.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT r.id, r.name, r.is_system, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}'), r.is_locked
                        FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id GROUP BY r.id ORDER BY r.name""")
         roles = [{"id": str(r[0]), "name": r[1], "system": r[2], "perms": sorted(r[3]), "locked": r[4]} for r in cur.fetchall()]
@@ -1008,7 +1072,7 @@ def _write_perms(cur, p, role_id, perms):
 
 @router.post("/admin/roles")
 def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("INSERT INTO roles (org_id, name) VALUES (%s,%s) ON CONFLICT DO NOTHING RETURNING id", (p.org_id, body.name))
         r = cur.fetchone()
         if not r:
@@ -1020,7 +1084,7 @@ def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
 
 @router.put("/admin/roles/{role_id}")
 def update_role(role_id: uuid.UUID, body: RoleIn, p: Principal = Depends(require("roles.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         name = _role_in_org(cur, role_id, p.org_id)
         cur.execute("SELECT 1 FROM users WHERE id=%s AND role_id=%s", (p.user_id, role_id))
         if cur.fetchone():       # checked before "locked" so nobody learns more than "not your own role"
@@ -1047,14 +1111,14 @@ class FeatureToggle(BaseModel):
 
 @router.get("/admin/features")
 def get_features(p: Principal = Depends(require("features.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT feature, in_plan, enabled FROM org_features ORDER BY feature")
         return [{"feature": r[0], "in_plan": r[1], "enabled": r[2]} for r in cur.fetchall()]
 
 
 @router.put("/admin/features")
 def toggle_feature(body: FeatureToggle, p: Principal = Depends(require("features.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("UPDATE org_features SET enabled=%s WHERE feature=%s AND in_plan RETURNING 1", (body.enabled, body.feature))
         if not cur.fetchone():
             raise HTTPException(403, "This feature isn't in your plan")
@@ -1072,6 +1136,7 @@ class SecurityIn(BaseModel):
     min_password_len: int | None = Field(None, ge=12, le=64)
     ip_allowlist: list[str] | None = None
     retention_years: int | None = Field(None, ge=5, le=15)
+    owner_access: str | None = Field(None, pattern="^(allow|require_approval|deny)$")   # may a Sentrail platform owner enter this tenant?
 
     @field_validator("ip_allowlist")
     @classmethod
@@ -1087,11 +1152,14 @@ SECURITY_COLS = ["mfa_required", "sso_enabled", "oidc_issuer", "oidc_client_id",
 
 @router.get("/admin/security")
 def get_security(p: Principal = Depends(require("security.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT mfa_required, sso_enabled, oidc_issuer, oidc_client_id, idle_timeout_min,
                               min_password_len, ip_allowlist, retention_years FROM security_settings""")
         r = cur.fetchone()
     out = dict(zip(SECURITY_COLS, r)); out["ip_allowlist"] = [str(x) for x in out["ip_allowlist"]]
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+        cur.execute("SELECT owner_access, legal_hold FROM organizations WHERE id=%s", (p.org_id,))
+        out["owner_access"], out["legal_hold"] = cur.fetchone()
     out["encryption"] = {"algorithm": "AES-256-GCM", "current_key": crypto.ring().current,
                          "key_manager": "OpenBao transit" if os.environ.get("BAO_ADDR") else "local (dev only)"}
     return out
@@ -1100,7 +1168,16 @@ def get_security(p: Principal = Depends(require("security.manage"))):
 @router.put("/admin/security")
 def set_security(body: SecurityIn, p: Principal = Depends(require("security.manage"))):
     changes = body.model_dump(exclude_unset=True)
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    owner_access = changes.pop("owner_access", None)
+    if owner_access is not None and p.access_session_id:
+        raise HTTPException(403, "A platform owner working inside this organization can't change who may enter it")
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+        if owner_access is not None:
+            cur.execute("SELECT owner_access FROM organizations WHERE id=%s FOR UPDATE", (p.org_id,))
+            before = cur.fetchone()[0]
+            if before != owner_access:
+                cur.execute("UPDATE organizations SET owner_access=%s WHERE id=%s", (owner_access, p.org_id))
+                _audit(cur, p, "owner_access_setting_changed", None, {"from": before, "to": owner_access})
         cur.execute(f"SELECT {', '.join(SECURITY_COLS)} FROM security_settings FOR UPDATE")
         current = dict(zip(SECURITY_COLS, cur.fetchone()))
         current["ip_allowlist"] = [str(x) for x in current["ip_allowlist"]]
@@ -1134,7 +1211,7 @@ def create_api_key(body: ApiKeyIn | None = None, p: Principal = Depends(require(
     prefix = "sk_live_" + tokens.new_opaque()[:8].replace("_", "x").replace("-", "x")
     raw = f"{prefix}_{tokens.new_opaque()}"
     label = body.label if body else None
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("INSERT INTO api_keys (org_id, prefix, key_hash, created_by, label) VALUES (%s,%s,%s,%s,%s)",
                     (p.org_id, prefix, crypto.sha256(raw), p.user_id, label))
         _audit(cur, p, "api_key_created", prefix, {"label": label})
@@ -1143,7 +1220,7 @@ def create_api_key(body: ApiKeyIn | None = None, p: Principal = Depends(require(
 
 @router.get("/admin/api-keys")
 def list_api_keys(p: Principal = Depends(require("apikeys.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT prefix, label, created_at, created_by, revoked_at FROM api_keys ORDER BY created_at DESC")
         rows = cur.fetchall()
     return [{"prefix": r[0], "label": r[1], "created_at": r[2], "created_by": str(r[3]) if r[3] else None,
@@ -1152,7 +1229,7 @@ def list_api_keys(p: Principal = Depends(require("apikeys.manage"))):
 
 @router.delete("/admin/api-keys/{prefix}")
 def revoke_api_key(prefix: str, p: Principal = Depends(require("apikeys.manage"))):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("UPDATE api_keys SET revoked_at=now() WHERE prefix=%s AND revoked_at IS NULL RETURNING 1", (prefix,))
         if not cur.fetchone():
             raise HTTPException(404, "No active key with that prefix")
@@ -1168,7 +1245,7 @@ COLS = "seq, org_id, at, actor_id, actor_role, action, target, detail, ip, prev_
 
 @router.get("/admin/audit")
 def audit_events(limit: int = Query(200, ge=1, le=1000), p: Principal = Depends(require_any("audit.view", "platform.audit.view"))):
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(f"SELECT {COLS} FROM audit_events WHERE org_id IS NOT DISTINCT FROM %s ORDER BY seq DESC LIMIT %s",
                     (p.org_id, limit))
         rows = cur.fetchall()
@@ -1178,7 +1255,7 @@ def audit_events(limit: int = Query(200, ge=1, le=1000), p: Principal = Depends(
 
 @router.get("/admin/audit/verify")
 def audit_verify(p: Principal = Depends(require_any("audit.view", "platform.audit.view"))):
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(f"SELECT {COLS} FROM audit_events WHERE org_id IS NOT DISTINCT FROM %s ORDER BY seq", (p.org_id,))
         return audit.verify_rows(cur.fetchall())
 
@@ -1208,7 +1285,7 @@ def me(p: Principal = Depends(signed_in_user)):
               "email": crypto.mask_email(crypto.decrypt(e_enc, home, "email"))}
     tenants = _tenant_list(p)
     if p.selecting:        # signed in but no tenant chosen yet (several memberships) or no access at all
-        return {**person, "role": None, "tenant": None, "permissions": [], "features": [], "mfa_enabled": True, "mfa_setup": None,
+        return {**person, "role": None, "access_session": None, "must_rotate": p.must_rotate, "tenant": None, "permissions": [], "features": [], "mfa_enabled": True, "mfa_setup": None,
                 "session_mfa": p.mfa, "scope": "select", "selecting": True, "tenants": tenants}
     tenant = {"name": "Platform console", "slug": "platform", "environment": "platform", "brand_color": "#534AB7"}
     if p.org_id:
@@ -1216,7 +1293,14 @@ def me(p: Principal = Depends(signed_in_user)):
             cur.execute("SELECT legal_name, slug, environment, brand_color FROM org_display(%s)", (p.org_id,))
             n, slug, env, color = cur.fetchone()
         tenant = {"id": p.org_id, "name": n, "slug": slug, "environment": env, "brand_color": color}
-    return {**person, "role": p.role,
+    access = None
+    if p.access_session_id:
+        with pg.tx(p.org_id, actor=p.actor) as cur:
+            cur.execute("SELECT expires_at, reason, extended FROM tenant_access_sessions WHERE id=%s", (p.access_session_id,))
+            r = cur.fetchone()
+        if r:
+            access = {"id": p.access_session_id, "expires_at": r[0], "reason": r[1], "extended": r[2]}
+    return {**person, "role": p.role, "access_session": access, "must_rotate": p.must_rotate,
             "tenant": tenant, "permissions": sorted(p.perms), "features": sorted(p.features),
             # mfa_setup: "required" (the organization insists), "optional" (turn it on from My account), or None (it's on)
             "mfa_enabled": p.mfa_setup is None, "mfa_setup": p.mfa_setup, "session_mfa": p.mfa,
@@ -1237,11 +1321,18 @@ class TenantSwitch(BaseModel):
 def switch_tenant(request: Request, response: Response, body: TenantSwitch, p: Principal = Depends(signed_in_user)):
     """Move this sign-in to another tenant (or the console). The target must be one of the caller's active memberships; the
     old session ends and a new one (new session id) starts, so nothing from one tenant carries into the next. Audited."""
-    if not config.ACCESS_MODEL_V2:
-        raise HTTPException(403, "Switching tenants isn't available yet")
+    target, role_id, asid = body.tenant_id, None, None
+    from app import owner_access
+    access = owner_access.live_session(p.user_id, target) if target else None     # an owner's live access session lets them in
     staff, mems = _memberships(p.user_id)
-    target, role_id = body.tenant_id, None
-    if target is None:
+    if not config.ACCESS_MODEL_V2 and not access and not (target is None and staff):     # (staff may always return to the console)
+        raise HTTPException(403, "Switching tenants isn't available yet")
+    if access:
+        with pg.tx(platform=True, actor=p.actor) as cur:
+            cur.execute("SELECT id FROM roles WHERE org_id=%s AND is_locked", (target,))
+            role_id = cur.fetchone()[0]
+        asid = access[0]
+    elif target is None:
         if not staff:
             raise HTTPException(403, "You don't have access to the platform console")
         role_id = staff[0]
@@ -1267,9 +1358,10 @@ def switch_tenant(request: Request, response: Response, body: TenantSwitch, p: P
     method, last_mfa, source = (old[0], old[1], old[2]) if old else ("password" if not p.mfa else "password+totp", None, p.org_id)
     with pg.tx(target, platform=target is None) as cur:
         session = _issue(cur, response, p.user_id, target, role_id, sv, request, method=method, mfa=p.mfa,
-                         scope="platform" if target is None else "tenant", last_mfa_at=last_mfa)
+                         scope="platform" if target is None else "tenant", last_mfa_at=last_mfa, access_session_id=asid)
         audit.write(cur, target, p.user_id, None, "auth.tenant_switch", None,
-                    {"from": str(source) if source else "platform", "to": str(target) if target else "platform"}, client_ip(request))
+                    {"from": str(source) if source else "platform", "to": str(target) if target else "platform",
+                     **({"access_session_id": str(asid)} if asid else {})}, client_ip(request))
     if source != target:
         with pg.tx(source, platform=source is None) as cur:
             audit.write(cur, source, p.user_id, None, "auth.tenant_switch", None,
@@ -1297,7 +1389,7 @@ def step_up(request: Request, body: StepUpIn, p: Principal = Depends(signed_in_u
             raise HTTPException(409, "Turn on two-factor authentication first")
         enc, last, role_id, sv = row[:4]
         ok = _second_factor(cur, p.user_id, home, enc, last, body.code, body.recovery_code)
-    with pg.tx(p.org_id, platform=p.org_id is None, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.org_id is None, actor=p.actor, access_session=p.access_session_id) as cur:
         if not ok:
             audit.write(cur, p.org_id, p.user_id, None, "auth.step_up_failed", None, {}, client_ip(request))
         else:
@@ -1345,7 +1437,7 @@ def end_session(family_id: uuid.UUID, p: Principal = Depends(current_user)):
         ended = cur.fetchone()
     if not ended:       # someone else's session, one that doesn't exist, or one that already ended: all look the same
         raise HTTPException(404, "That isn't one of your active sessions")
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         _audit(cur, p, "session_ended", str(family_id))
     return {"ok": True}
 
@@ -1359,7 +1451,7 @@ def end_other_sessions(p: Principal = Depends(current_user)):
         cur.execute("""UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL
                        AND family_id IS DISTINCT FROM %s""", (p.user_id, current))
         n = cur.rowcount
-    with pg.tx(p.org_id, platform=p.platform, actor=p.actor) as cur:
+    with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         _audit(cur, p, "other_sessions_ended", None, {"count": n})
     return {"ended": n}
 
@@ -1377,7 +1469,7 @@ class SsoIn(BaseModel):
 @router.put("/admin/sso")
 def set_sso(body: SsoIn, p: Principal = Depends(require("security.manage"))):
     token = "sentrail-verify=" + secrets.token_urlsafe(24)
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""UPDATE organizations SET sso_domain_pending=%s, sso_idp_alias=%s, sso_enforced=%s,
                        domain_verify_token=%s WHERE id=%s""", (body.domain, body.idp_alias, body.enforced, token, p.org_id))
         _audit(cur, p, "sso_configured", body.domain, {"idp_alias": body.idp_alias, "enforced": body.enforced})
@@ -1388,7 +1480,7 @@ def set_sso(body: SsoIn, p: Principal = Depends(require("security.manage"))):
 @router.post("/admin/sso/verify")
 def verify_sso(p: Principal = Depends(require("security.manage"))):
     import dns.resolver
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT sso_domain_pending, domain_verify_token FROM organizations WHERE id=%s", (p.org_id,))
         domain, token = cur.fetchone() or (None, None)
     if not domain:
@@ -1401,7 +1493,7 @@ def verify_sso(p: Principal = Depends(require("security.manage"))):
     if not found:
         raise HTTPException(409, "The TXT record wasn't found yet. DNS changes can take up to an hour")
     try:
-        with pg.tx(p.org_id, actor=p.actor) as cur:
+        with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
             cur.execute("UPDATE organizations SET sso_domain=sso_domain_pending, sso_domain_pending=NULL WHERE id=%s", (p.org_id,))
             _audit(cur, p, "sso_domain_verified", str(domain))
     except psycopg.errors.UniqueViolation:
@@ -1440,6 +1532,10 @@ def invite_platform_staff(request: Request, body: InviteIn, p: Principal = Depen
         role = _platform_role(cur, body.role_id)
         if str(body.role_id) == PLATFORM_OWNER_ROLE and not p.can("platform.owners.manage"):
             raise HTTPException(403, "Only a platform owner can add another platform owner")
+        if str(body.role_id) == PLATFORM_OWNER_ROLE:
+            # adding an owner needs a second owner (the email is kept encrypted until then)
+            return _request_approval(cur, p, "owner.add", {"email_enc": crypto.encrypt(crypto.normalize_email(body.email), None, "email"),
+                                                          "role_id": str(body.role_id)}, f"Add a platform owner ({crypto.mask_email(body.email)})")
         link = _invite(cur, None, "the Sentrail platform team", body.email, body.role_id, role, p.user_id)
         _audit(cur, p, "platform_user_invited", crypto.mask_email(body.email), {"role": role})
     return {"invited": crypto.mask_email(body.email), **({"dev_link": link} if _dev() else {})}
@@ -1461,6 +1557,10 @@ def update_platform_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends
             cur.execute("""SELECT count(*) FROM users WHERE org_id IS NULL AND status='active' AND role_id=%s""", (PLATFORM_OWNER_ROLE,))
             if cur.fetchone()[0] <= 1:
                 raise HTTPException(409, "The platform needs at least one active owner")
+        if touching_owner:
+            # changing, demoting or suspending an owner (or promoting someone to owner) needs a second owner
+            return _request_approval(cur, p, "owner.change", {"uid": str(uid), "role_id": str(body.role_id) if body.role_id else None,
+                                                              "status": body.status}, "Change a platform owner")
         if body.role_id:
             new_role = _platform_role(cur, body.role_id)
             cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (body.role_id, uid))
@@ -1596,18 +1696,17 @@ def get_platform_security(p: Principal = Depends(require("platform.security.mana
 
 @router.put("/platform/security")
 def set_platform_security(body: PlatformSecurityIn, p: Principal = Depends(require("platform.security.manage"))):
-    with pg.tx(platform=True) as cur:
-        cur.execute("""UPDATE platform_settings SET min_password_len_floor=%s, max_idle_timeout_min=%s, max_session_hours=%s,
-                       retention_years_floor=%s, passkeys_allowed=%s, platform_staff_passkey_only=%s, allowed_regions=%s,
-                       updated_at=now()""", (body.min_password_len_floor, body.max_idle_timeout_min, body.max_session_hours,
-                                             body.retention_years_floor, body.passkeys_allowed,
-                                             body.platform_staff_passkey_only, body.allowed_regions))
-        # bring every tenant up to the new baseline; tenants that are already stricter keep their settings
-        cur.execute("""UPDATE security_settings SET min_password_len = GREATEST(min_password_len, %s),
-                       idle_timeout_min = LEAST(idle_timeout_min, %s), retention_years = GREATEST(retention_years, %s)""",
-                    (body.min_password_len_floor, body.max_idle_timeout_min, body.retention_years_floor))
-        raised = cur.rowcount
-        _audit(cur, p, "platform_security_changed", None, {**body.model_dump(), "tenants_updated": raised})
+    """Tightening the baseline applies at once. LOOSENING it (shorter passwords, longer sessions or idle time, less retention, more regions,
+    passkeys no longer required) is parked until a second owner approves it."""
+    with pg.tx(platform=True, actor=p.actor) as cur:
+        cur.execute("""SELECT min_password_len_floor, max_idle_timeout_min, max_session_hours, retention_years_floor,
+                              passkeys_allowed, platform_staff_passkey_only, allowed_regions FROM platform_settings""")
+        old = dict(zip(PlatformSecurityIn.model_fields, cur.fetchone()))
+        new = body.model_dump()
+        looser = _baseline_loosens(old, new)
+        if looser:
+            return _request_approval(cur, p, "baseline.loosen", new, "Loosen the security baseline: " + ", ".join(looser))
+        raised = _apply_baseline(cur, p, new)
     return {"ok": True, "tenants_checked": raised}
 
 
@@ -1647,7 +1746,7 @@ def _end_tenant_sessions(cur, org_id):
 @router.post("/platform/orgs/{org_id}/status")
 def set_org_status(org_id: uuid.UUID, body: StatusIn, p: Principal = Depends(require("platform.tenants.manage"))):
     """Suspend a tenant (nobody can sign in, every session and API key stops, data is kept) or reactivate it."""
-    with pg.tx(platform=True, actor=p.actor) as cur:
+    with pg.tx(platform=True, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT status, legal_name FROM organizations WHERE id=%s FOR UPDATE", (org_id,))
         r = cur.fetchone()
         if not r:
@@ -1663,8 +1762,25 @@ def set_org_status(org_id: uuid.UUID, body: StatusIn, p: Principal = Depends(req
     return {"org_id": str(org_id), "status": body.status}
 
 
-APPROVAL_PERMS = {"tenant.delete": "platform.tenants.delete"}        # phase 5 adds owner changes and loosening the security baseline
-APPROVAL_VIEW = ("platform.tenants.delete", "platform.owners.manage", "platform.security.manage")
+APPROVAL_PERMS = {"tenant.delete": "platform.tenants.delete", "owner.add": "platform.owners.manage",
+                  "owner.change": "platform.owners.manage", "baseline.loosen": "platform.security.manage"}   # owner_access adds tenant.legal_hold
+APPROVAL_VIEW = ("platform.tenants.delete", "platform.owners.manage", "platform.security.manage", "platform.tenants.manage")
+EXECUTORS: dict = {}       # action -> fn(cur, approver, payload, reason, approval_id) -> (result dict, callable run after commit or None)
+
+
+def _request_approval(cur, p: Principal, action: str, payload: dict, reason: str) -> dict:
+    """Park a high-risk platform action until a SECOND owner approves it (within 24 hours). Nothing is applied now."""
+    cur.execute("""SELECT 1 FROM platform_approvals WHERE action=%s AND status='pending' AND expires_at > now() AND payload=%s::jsonb""",
+                (action, json.dumps(payload)))
+    if cur.fetchone():
+        raise HTTPException(409, "The same request is already waiting for a second owner")
+    cur.execute("""INSERT INTO platform_approvals (action, payload, requested_by, reason, expires_at)
+                   VALUES (%s, %s, %s, %s, now() + interval '24 hours') RETURNING id, expires_at""",
+                (action, json.dumps(payload), p.user_id, reason))
+    aid, exp = cur.fetchone()
+    _audit(cur, p, "approval_requested", str(aid), {"action": action, "reason": reason})
+    return {"approval_id": str(aid), "pending": True, "expires_at": exp,
+            "next": "A second Platform owner has to approve this within 24 hours (POST /platform/approvals/{id}/approve)"}
 
 
 @router.post("/platform/orgs/{org_id}/delete")
@@ -1677,24 +1793,15 @@ def request_org_delete(org_id: uuid.UUID, body: Reason, p: Principal = Depends(r
             raise HTTPException(404, "Organization not found")
         if r[0] == "deleted":
             raise HTTPException(409, "This organization is already deleted")
-        cur.execute("""SELECT 1 FROM platform_approvals WHERE action='tenant.delete' AND status='pending' AND expires_at > now()
-                       AND payload->>'org_id'=%s""", (str(org_id),))
-        if cur.fetchone():
-            raise HTTPException(409, "A deletion request for this organization is already waiting for a second owner")
-        cur.execute("""INSERT INTO platform_approvals (action, payload, requested_by, reason, expires_at)
-                       VALUES ('tenant.delete', %s, %s, %s, now() + interval '24 hours') RETURNING id, expires_at""",
-                    (json.dumps({"org_id": str(org_id), "name": r[1]}), p.user_id, body.reason))
-        aid, exp = cur.fetchone()
-        _audit(cur, p, "approval_requested", str(aid), {"action": "tenant.delete", "org": r[1], "reason": body.reason})
-    return {"approval_id": str(aid), "expires_at": exp, "next": "A second Platform owner has to approve this within 24 hours"}
+        return _request_approval(cur, p, "tenant.delete", {"org_id": str(org_id), "name": r[1]}, body.reason)
 
 
 @router.get("/platform/approvals")
 def list_approvals(p: Principal = Depends(require_any(*APPROVAL_VIEW))):
-    with pg.tx(platform=True, actor=p.actor) as cur:
+    with pg.tx(platform=True, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT id, action, payload, requested_by, approved_by, status, reason, created_at, decided_at, expires_at
                        FROM platform_approvals ORDER BY created_at DESC LIMIT 100""")
-        return [{"id": str(r[0]), "action": r[1], "payload": r[2], "requested_by": str(r[3]), "approved_by": str(r[4]) if r[4] else None,
+        return [{"id": str(r[0]), "action": r[1], "payload": {k: v for k, v in r[2].items() if k != "email_enc"}, "requested_by": str(r[3]), "approved_by": str(r[4]) if r[4] else None,
                  "status": "expired" if r[5] == "pending" and r[9] < _now() else r[5], "reason": r[6], "created_at": r[7],
                  "decided_at": r[8], "expires_at": r[9]} for r in cur.fetchall()]
 
@@ -1706,15 +1813,88 @@ def _delete_tenant(cur, p: Principal, org_id, name, reason, approval_id):
                    deletion_due_at = now() + make_interval(years => %s) WHERE id=%s RETURNING deletion_due_at""", (reason, years, org_id))
     due = cur.fetchone()[0]
     _end_tenant_sessions(cur, org_id)
+    cur.execute("UPDATE tenant_access_sessions SET status='ended', ended_at=now(), ended_reason='tenant deleted' WHERE tenant_id=%s AND status IN ('requested','approved','active')", (org_id,))
     detail = {"reason": reason, "approval": str(approval_id), "data_removal_due": due.isoformat(), "retention_years": years}
     _audit(cur, p, "tenant_deleted", name, detail, org_id=org_id)
     _audit(cur, p, "tenant_deleted", name, {**detail, "org_id": str(org_id)})
     return due
 
 
+def _exec_tenant_delete(cur, p, payload, reason, approval_id):
+    org_id = payload["org_id"]
+    due = _delete_tenant(cur, p, org_id, payload.get("name"), reason, approval_id)
+
+    def revoke_keys():                       # API keys are tenant data: revoked from inside the tenant scope
+        with pg.tx(org_id) as c2:
+            c2.execute("UPDATE api_keys SET revoked_at=now() WHERE revoked_at IS NULL")
+    return {"executed": "tenant.delete", "data_removal_due": due}, revoke_keys
+
+
+def _exec_owner_add(cur, p, payload, reason, approval_id):
+    email = crypto.decrypt(payload["email_enc"], None, "email")
+    link = _invite(cur, None, "the Sentrail platform team", email, payload["role_id"], "Platform owner", p.user_id)
+    _audit(cur, p, "platform_owner_invited", crypto.mask_email(email), {"approval": str(approval_id)})
+    return {"executed": "owner.add", "invited": crypto.mask_email(email), **({"dev_link": link} if _dev() else {})}, None
+
+
+def _exec_owner_change(cur, p, payload, reason, approval_id):
+    uid, new_role, new_status = payload["uid"], payload.get("role_id"), payload.get("status")
+    cur.execute("SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s AND u.org_id IS NULL", (uid,))
+    cur_role = cur.fetchone()
+    if not cur_role:
+        raise HTTPException(404, "Platform user not found")
+    leaving = cur_role[0] == "Platform owner" and (new_status == "suspended" or (new_role and str(new_role) != PLATFORM_OWNER_ROLE))
+    if leaving:
+        cur.execute("SELECT count(*) FROM users WHERE org_id IS NULL AND status='active' AND role_id=%s", (PLATFORM_OWNER_ROLE,))
+        if cur.fetchone()[0] <= 1:
+            raise HTTPException(409, "The platform needs at least one active owner")
+    if new_role:
+        _platform_role(cur, new_role)
+        cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (new_role, uid))
+    if new_status:
+        cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s", (new_status, uid))
+        cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
+    _audit(cur, p, "platform_owner_changed", uid, {"role_id": new_role, "status": new_status, "approval": str(approval_id)})
+    return {"executed": "owner.change"}, None
+
+
+def _baseline_loosens(old: dict, new: dict) -> list[str]:
+    out = []
+    if new["min_password_len_floor"] < old["min_password_len_floor"]: out.append("shorter minimum password")
+    if new["max_idle_timeout_min"] > old["max_idle_timeout_min"]: out.append("longer idle timeout")
+    if new["max_session_hours"] > old["max_session_hours"]: out.append("longer sessions")
+    if new["retention_years_floor"] < old["retention_years_floor"]: out.append("shorter retention")
+    if old["platform_staff_passkey_only"] and not new["platform_staff_passkey_only"]: out.append("passkeys no longer required for staff")
+    if set(new["allowed_regions"]) - set(old["allowed_regions"]): out.append("more data regions")
+    return out
+
+
+def _apply_baseline(cur, p: Principal, body: dict, extra: dict | None = None):
+    cur.execute("""UPDATE platform_settings SET min_password_len_floor=%s, max_idle_timeout_min=%s, max_session_hours=%s,
+                   retention_years_floor=%s, passkeys_allowed=%s, platform_staff_passkey_only=%s, allowed_regions=%s,
+                   updated_at=now()""", (body["min_password_len_floor"], body["max_idle_timeout_min"], body["max_session_hours"],
+                                         body["retention_years_floor"], body["passkeys_allowed"],
+                                         body["platform_staff_passkey_only"], body["allowed_regions"]))
+    # bring every tenant up to the new baseline; tenants that are already stricter keep their settings
+    cur.execute("""UPDATE security_settings SET min_password_len = GREATEST(min_password_len, %s),
+                   idle_timeout_min = LEAST(idle_timeout_min, %s), retention_years = GREATEST(retention_years, %s)""",
+                (body["min_password_len_floor"], body["max_idle_timeout_min"], body["retention_years_floor"]))
+    raised = cur.rowcount
+    _audit(cur, p, "platform_security_changed", None, {**body, "tenants_updated": raised, **(extra or {})})
+    return raised
+
+
+def _exec_baseline(cur, p, payload, reason, approval_id):
+    raised = _apply_baseline(cur, p, payload, {"approval": str(approval_id), "loosening": True})
+    return {"executed": "baseline.loosen", "tenants_checked": raised}, None
+
+
+EXECUTORS.update({"tenant.delete": _exec_tenant_delete, "owner.add": _exec_owner_add, "owner.change": _exec_owner_change,
+                  "baseline.loosen": _exec_baseline})
+
+
 def _decide(approval_id, p: Principal, approve: bool, note: str | None = None):
-    error = None
-    org_for_keys = None
+    error, after, result = None, None, {"status": "approved" if approve else "denied"}
     with pg.tx(platform=True, actor=p.actor) as cur:
         cur.execute("""SELECT action, payload, requested_by, status, expires_at, reason FROM platform_approvals WHERE id=%s FOR UPDATE""", (approval_id,))
         a = cur.fetchone()
@@ -1736,16 +1916,13 @@ def _decide(approval_id, p: Principal, approve: bool, note: str | None = None):
         else:
             cur.execute("UPDATE platform_approvals SET status='approved', approved_by=%s, decided_at=now() WHERE id=%s", (p.user_id, approval_id))
             _audit(cur, p, "approval_approved", str(approval_id), {"action": action})
-            if action == "tenant.delete":
-                org_for_keys = payload["org_id"]
-                due = _delete_tenant(cur, p, org_for_keys, payload.get("name"), reason, approval_id)
+            done, after = EXECUTORS[action](cur, p, payload, reason, approval_id)
+            result = {"status": "approved", **done}
     if error:
         raise error
-    if org_for_keys:
-        with pg.tx(org_for_keys) as cur:        # API keys are tenant data: revoked from inside the tenant scope
-            cur.execute("UPDATE api_keys SET revoked_at=now() WHERE revoked_at IS NULL")
-        return {"status": "approved", "executed": "tenant.delete", "data_removal_due": due}
-    return {"status": "approved" if approve else "denied"}
+    if after:
+        after()
+    return result
 
 
 @router.post("/platform/approvals/{approval_id}/approve")
@@ -1767,7 +1944,7 @@ class AdminRecoveryIn(BaseModel):
 def assign_tenant_admin(org_id: uuid.UUID, body: AdminRecoveryIn, p: Principal = Depends(require("platform.tenants.manage"))):
     """When a tenant has lost its administrator: make this person its Tenant admin (a member is promoted, anyone else is invited for
     72 hours). Needs a reason and is written to the tenant's audit log AND the platform's."""
-    with pg.tx(platform=True, actor=p.actor) as cur:
+    with pg.tx(platform=True, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT status, legal_name FROM organizations WHERE id=%s FOR UPDATE", (org_id,))
         org = cur.fetchone()
         if not org:

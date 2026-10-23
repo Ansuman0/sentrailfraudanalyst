@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { accessSession } from "../services/sentrail";
 import { Logo } from "./Logo";
 
 interface NavItem {
@@ -111,6 +112,18 @@ export function Layout() {
         </div>
       </nav>
       <main className="page">
+        {me.access_session && (
+          <div className="accessbanner" role="status">
+            <div>
+              <b>Platform owner access.</b> You are inside {t.name} until {new Date(me.access_session.expires_at).toLocaleTimeString()}.
+              Everything you do is recorded in this organization's audit log and the platform's.
+              <span className="muted"> Reason: {me.access_session.reason}</span>
+            </div>
+            <button type="button" className="btn" onClick={() => void accessSession.end().finally(() => void switchTenant(null).then(() => navigate("/")))}>
+              End access
+            </button>
+          </div>
+        )}
         <Outlet />
       </main>
     </div>

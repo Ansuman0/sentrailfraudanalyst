@@ -25,6 +25,17 @@ MESSAGES = {
                   "your next sign-in.\n\nIf you didn't expect this, contact your administrator."),
     "password_changed": ("Your Sentrail password was changed",
                          "The password for your Sentrail account was changed.\n\nIf this wasn't you, contact your administrator immediately."),
+    "owner_access_requested": ("A Sentrail platform owner asks to enter your organization",
+                               "A platform owner asked for temporary access to your organization{where}. Sign in as an administrator "
+                               "to approve or deny it. Nothing happens until you decide."),
+    "owner_access_started": ("A Sentrail platform owner has entered your organization",
+                             "A platform owner started a time-limited access session in your organization{where}. Everything they do is "
+                             "recorded in your audit log. You can see and review it under Security."),
+    "owner_access_ended": ("A Sentrail platform owner's access to your organization has ended",
+                           "A platform owner's access session in your organization has ended{where}."),
+    "break_glass_used": ("The break-glass owner account was just used",
+                         "The sealed break-glass account of the Sentrail platform was used to sign in{where}. If this was planned, "
+                         "no action is needed. If not, treat it as a security incident. The account's password must now be rotated."),
     "role_changed": ("Your Sentrail role was changed",
                      "Your role in Sentrail was changed{where}. Your access updates the next time you sign in.\n\n"
                      "If you didn't expect this, contact your administrator."),

@@ -15,7 +15,7 @@ def pool() -> ConnectionPool:
 
 
 @contextmanager
-def tx(org_id=None, platform: bool = False, actor=None):
+def tx(org_id=None, platform: bool = False, actor=None, access_session=None):
     """Transaction scoped to a tenant. SET LOCAL resets at commit, so pooled
     connections never leak one tenant's context into another request.
 
@@ -29,4 +29,6 @@ def tx(org_id=None, platform: bool = False, actor=None):
                 cur.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id) if org_id else "",))
                 cur.execute("SELECT set_config('app.platform', %s, true)", ("on" if platform else "off",))
                 cur.execute("SELECT set_config('app.actor', %s, true)", (str(actor) if actor else "",))
+                # an owner working inside a tenant: every audit event written in this transaction is tagged with the session
+                cur.execute("SELECT set_config('app.access_session', %s, true)", (str(access_session) if access_session else "",))
                 yield cur

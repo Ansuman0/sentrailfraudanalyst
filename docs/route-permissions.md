@@ -5,6 +5,10 @@ a unit test fails when this file is out of date, and the API refuses to start if
 
 | Method | Path | Protected by |
 |---|---|---|
+| GET | `/admin/access-requests` | `security.manage` |
+| DELETE | `/admin/access-requests/{sid}` | `security.manage` |
+| POST | `/admin/access-requests/{sid}/approve` | `security.manage` |
+| POST | `/admin/access-requests/{sid}/deny` | `security.manage` |
 | GET | `/admin/api-keys` | `apikeys.manage` |
 | POST | `/admin/api-keys` | `apikeys.manage` |
 | DELETE | `/admin/api-keys/{prefix}` | `apikeys.manage` |
@@ -47,21 +51,28 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/healthz` | public (before sign-in) |
 | POST | `/invitations/accept` | public (before sign-in) |
 | GET | `/me` | signed in (own account only) |
+| DELETE | `/me/access-session` | signed in (own account only) |
 | POST | `/me/mfa/confirm` | signed in (own account only) |
 | POST | `/me/mfa/setup` | signed in (own account only) |
+| POST | `/me/password` | signed in (own account only) |
 | GET | `/me/sessions` | signed in (own account only) |
 | POST | `/me/sessions/end-others` | signed in (own account only) |
 | DELETE | `/me/sessions/{family_id}` | signed in (own account only) |
 | GET | `/me/tenants` | signed in (own account only) |
-| GET | `/platform/approvals` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
-| POST | `/platform/approvals/{approval_id}/approve` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
-| POST | `/platform/approvals/{approval_id}/deny` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete` |
+| GET | `/platform/access` | any of `platform.audit.view`, `platform.tenant.access` |
+| DELETE | `/platform/access/{sid}` | `platform.tenant.access` |
+| POST | `/platform/access/{sid}/extend` | `platform.tenant.access` |
+| GET | `/platform/approvals` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete`, `platform.tenants.manage` |
+| POST | `/platform/approvals/{approval_id}/approve` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete`, `platform.tenants.manage` |
+| POST | `/platform/approvals/{approval_id}/deny` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete`, `platform.tenants.manage` |
 | POST | `/platform/invitations` | `platform.users.manage` |
 | GET | `/platform/orgs` | any of `platform.support`, `platform.tenants.manage` |
 | POST | `/platform/orgs` | `platform.tenants.manage` |
+| POST | `/platform/orgs/{org_id}/access` | `platform.tenant.access` |
 | POST | `/platform/orgs/{org_id}/admin` | `platform.tenants.manage` |
 | POST | `/platform/orgs/{org_id}/delete` | `platform.tenants.delete` |
 | PUT | `/platform/orgs/{org_id}/features` | `platform.plans.manage` |
+| POST | `/platform/orgs/{org_id}/legal-hold` | `platform.tenants.manage` |
 | PUT | `/platform/orgs/{org_id}/plan` | `platform.tenants.manage` |
 | POST | `/platform/orgs/{org_id}/status` | `platform.tenants.manage` |
 | GET | `/platform/orgs/{org_id}/users` | `platform.support` |

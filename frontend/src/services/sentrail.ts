@@ -25,6 +25,12 @@ export const auth = {
     request<TokenResponse>("/session/step-up", { method: "POST", body: code, retryOn401: false }),
 };
 
+// ---- an owner's access session inside a tenant ----
+export const accessSession = {
+  /** End the session I'm working in (self-service). */
+  end: () => request<{ ended: string }>("/me/access-session", { method: "DELETE", retryOn401: false }),
+};
+
 // ---- tenants: the places this person can work, and moving between them (a new session each time) ----
 export const tenants = {
   list: () => request<{ tenants: TenantChoice[] }>("/me/tenants"),

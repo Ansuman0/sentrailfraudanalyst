@@ -27,7 +27,7 @@ class Conflict(Exception):
 
 
 def audit(p, action: str, target: str, detail: dict | str = ""):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         auditlog.write(cur, p.org_id, p.user_id if p.kind == "user" else None, p.role, action, target,
                        detail if isinstance(detail, dict) else {"note": detail}, p.ip)
 
@@ -48,7 +48,7 @@ def list_alerts(p, band=None, status="open"):
     q, args = f"SELECT {', '.join(ALERT_COLS)} FROM alerts WHERE status=%s", [status]
     if band:
         q += " AND band=%s"; args.append(band)
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(q + " ORDER BY score DESC LIMIT 500", args)
         return [_alert(r) for r in cur.fetchall()]
 
@@ -60,7 +60,7 @@ def _alert(r) -> dict:
 
 
 def get_alert(p, alert_id):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(f"SELECT {', '.join(ALERT_COLS)} FROM alerts WHERE id=%s", (alert_id,))
         r = cur.fetchone()
     return _alert(r) if r else None
@@ -69,7 +69,7 @@ def get_alert(p, alert_id):
 def decide(p, alert_id, decision: str, reason: str) -> str:
     """Apply an analyst decision. Raises NotFound or Conflict; audits inside the same transaction."""
     new = DECISION_STATUS[decision]
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT status FROM alerts WHERE id=%s FOR UPDATE", (alert_id,))
         r = cur.fetchone()
         if not r:
@@ -83,7 +83,7 @@ def decide(p, alert_id, decision: str, reason: str) -> str:
 
 
 def assign(p, alert_id, user_id) -> None:
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         if user_id:
             cur.execute("""SELECT 1 FROM users u JOIN role_permissions rp ON rp.role_id=u.role_id
                            WHERE u.id=%s AND u.status='active' AND rp.perm='cases.decide'""", (user_id,))
@@ -96,19 +96,19 @@ def assign(p, alert_id, user_id) -> None:
 
 
 def set_status(p, alert_id, status):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("UPDATE alerts SET status=%s WHERE id=%s", (status, alert_id))
 
 
 def save_ai_draft(p, alert_id, text):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""INSERT INTO str_drafts (org_id, alert_id, ai_draft_enc, drafted_by) VALUES (%s,%s,%s,%s)
                        ON CONFLICT (org_id, alert_id) DO UPDATE SET ai_draft_enc=EXCLUDED.ai_draft_enc, updated_at=now()""",
                     (p.org_id, alert_id, crypto.encrypt(text, p.org_id, "str"), p.user_id))
 
 
 def submit_str(p, alert_id, final_text):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT status FROM alerts WHERE id=%s FOR UPDATE", (alert_id,))
         r = cur.fetchone()
         if not r:
@@ -126,7 +126,7 @@ def submit_str(p, alert_id, final_text):
 
 
 def get_str(p, alert_id) -> dict | None:
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT ai_draft_enc, final_enc, drafted_by, approved_by, status, updated_at
                        FROM str_drafts WHERE alert_id=%s""", (alert_id,))
         r = cur.fetchone()
@@ -141,7 +141,7 @@ def get_str(p, alert_id) -> dict | None:
 
 def approve_str(p, alert_id) -> bool:
     """Four-eyes: the database CHECK rejects approval by the drafter as a second line of defence."""
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""SELECT d.drafted_by FROM str_drafts d JOIN alerts a ON a.org_id=d.org_id AND a.id=d.alert_id
                        WHERE d.alert_id=%s AND d.status='awaiting_approval' AND a.status='awaiting_approval'
                        FOR UPDATE""", (alert_id,))
@@ -193,7 +193,7 @@ SCREENING_COLS = ["id", "customer_id", "direction", "address", "amount", "asset"
 def get_screening(p, sid) -> dict | None:
     if not sid:
         return None
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute(f"SELECT {', '.join(SCREENING_COLS)} FROM screenings WHERE id=%s", (sid,))
         r = cur.fetchone()
     if not r:
@@ -207,7 +207,7 @@ def get_screening(p, sid) -> dict | None:
 
 def override_screening(p, sid, action: str, reason: str) -> dict:
     """An analyst releases or blocks a HELD transfer, once. Engine blocks and releases can't be overridden."""
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT decision, override FROM screenings WHERE id=%s FOR UPDATE", (sid,))
         r = cur.fetchone()
         if not r:
@@ -231,7 +231,7 @@ def get_policy(org_id) -> dict:
 
 
 def set_policy(p, policy: dict):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("""INSERT INTO screening_policy (org_id, policy) VALUES (%s,%s)
                        ON CONFLICT (org_id) DO UPDATE SET policy=EXCLUDED.policy""", (p.org_id, json.dumps(policy)))
 
@@ -242,7 +242,7 @@ def set_policy(p, policy: dict):
 def audit_view(p, alert_id: str, restricted: bool):
     """Record that this person opened a case. A restricted case: every view. An ordinary case: once per person per hour, so the
     log shows who looked without drowning in page reloads."""
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         if not restricted:
             cur.execute("""SELECT 1 FROM audit_events WHERE org_id=%s AND actor_id=%s AND action='case_viewed' AND target=%s
                            AND at > now() - interval '1 hour' LIMIT 1""", (p.org_id, p.user_id, alert_id))
@@ -253,13 +253,13 @@ def audit_view(p, alert_id: str, restricted: bool):
 
 def customer_hidden(p, customer_id: str) -> bool:
     """True when every way to this customer is a restricted case the caller may not see (searches answer 'not found')."""
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT customer_hidden(%s, %s)", (p.org_id, customer_id))
         return bool(cur.fetchone()[0])
 
 
 def set_restricted(p, alert_id: str, restricted: bool, reason: str):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT restricted FROM alerts WHERE id=%s FOR UPDATE", (alert_id,))
         r = cur.fetchone()
         if not r:
@@ -275,7 +275,7 @@ def set_restricted(p, alert_id: str, restricted: bool, reason: str):
 
 
 def grant_case_access(p, alert_id: str, user_id: str):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT restricted FROM alerts WHERE id=%s", (alert_id,))
         r = cur.fetchone()
         if not r:
@@ -292,7 +292,7 @@ def grant_case_access(p, alert_id: str, user_id: str):
 
 
 def revoke_case_access(p, alert_id: str, user_id: str):
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("DELETE FROM case_access_grants WHERE alert_id=%s AND user_id=%s RETURNING 1", (alert_id, user_id))
         if not cur.fetchone():
             raise NotFound(user_id)
@@ -300,6 +300,6 @@ def revoke_case_access(p, alert_id: str, user_id: str):
 
 
 def case_access_list(p, alert_id: str) -> list[dict]:
-    with pg.tx(p.org_id, actor=p.actor) as cur:
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         cur.execute("SELECT user_id, granted_by, created_at FROM case_access_grants WHERE alert_id=%s ORDER BY created_at", (alert_id,))
         return [{"user_id": str(r[0]), "granted_by": str(r[1]) if r[1] else None, "granted_at": r[2]} for r in cur.fetchall()]

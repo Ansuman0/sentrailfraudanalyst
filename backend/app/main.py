@@ -18,6 +18,7 @@ from app.admin_api import router as admin_router
 from app.security.rbac import Principal, require, api_key
 from app.security.middleware import SecurityHeaders, limiter, api_key_or_ip
 from app.security.rbac import install_handlers
+from app.owner_access import router as access_router
 from app.logging_config import configure_logging
 
 app = FastAPI(title="Sentrail", version="0.3",
@@ -30,6 +31,7 @@ app.add_middleware(CORSMiddleware, allow_origins=[os.environ.get("APP_URL", "htt
                    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "traceparent", "X-Sentrail-CSRF"],
                    expose_headers=["X-Request-ID"])
 app.include_router(admin_router)
+app.include_router(access_router)
 install_handlers(app)
 configure_logging()
 

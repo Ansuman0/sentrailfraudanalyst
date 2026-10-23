@@ -204,3 +204,6 @@ dl.plain dd { margin: 0; }
 .modal { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
 .modal h2 { margin: 0 0 6px; font-size: 18px; }
 .modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin: 12px 0; }
+
+/* owner access banner (access model v2) */
+.accessbanner { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: -4px 0 16px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--chain); background: var(--chain-soft); color: var(--ink); font-size: 13.5px; }

@@ -143,3 +143,40 @@ describe("step-up dialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
+
+describe("owner access banner", () => {
+  it("shows a persistent banner while a platform owner works inside a tenant, and ends access from it", async () => {
+    let ended = false;
+    let switched: unknown = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/auth/refresh")) return json(200, { access_token: "t", token_type: "Bearer", expires_in: 600 });
+      if (url.endsWith("/me/access-session")) { ended = true; return json(200, { ended: "s1" }); }
+      if (url.endsWith("/session/tenant")) { switched = JSON.parse(String(init?.body)); return json(200, { access_token: "t2", token_type: "Bearer", expires_in: 600 }); }
+      if (url.endsWith("/me")) {
+        return json(200, { ...IN_ALPHA, tenants: [], role: "Tenant admin",
+          access_session: ended ? null : { id: "s1", expires_at: new Date(Date.now() + 3600_000).toISOString(), reason: "ticket 501", extended: false } });
+      }
+      if (url.includes("/alerts")) return json(200, []);
+      return json(404, {});
+    }));
+    renderAt("/alerts");
+    const banner = (await screen.findByText(/Platform owner access/)).closest(".accessbanner") as HTMLElement;
+    expect(banner).toHaveTextContent("Alpha Remit");
+    expect(banner).toHaveTextContent("ticket 501");
+    fireEvent.click(screen.getByRole("button", { name: "End access" }));
+    await waitFor(() => expect(ended).toBe(true));
+    await waitFor(() => expect(switched).toEqual({ tenant_id: null }));
+  });
+
+  it("shows no banner for ordinary members", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/auth/refresh")) return json(200, { access_token: "t", token_type: "Bearer", expires_in: 600 });
+      if (url.endsWith("/me")) return json(200, { ...IN_ALPHA, tenants: [], access_session: null });
+      if (url.includes("/alerts")) return json(200, []);
+      return json(404, {});
+    }));
+    renderAt("/alerts");
+    expect(await screen.findByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    expect(screen.queryByText(/Platform owner access/)).not.toBeInTheDocument();
+  });
+});
