@@ -2,7 +2,7 @@
 import { request } from "./http";
 import type {
   AdminUser, Alert, AlertStatus, ApiKey, AuditEvent, Band, CaseDetail, Investigation, LoginResponse, Me, Organization, Policy,
-  Plan, PlatformSecurity, RoleSummary, SearchResult, SecuritySettings, Session, TenantChoice, TokenResponse, TraceResult,
+  Passkey, Plan, PlatformSecurity, RoleSummary, SearchResult, SecuritySettings, Session, TenantChoice, TokenResponse, TraceResult,
 } from "../types/api";
 
 // ---- sign-in ----
@@ -16,13 +16,27 @@ export const auth = {
       method: "POST", body: { mfa_token, ...code }, withCookies: true, retryOn401: false,
     }),
   discover: (email: string) =>
-    request<{ method: "sso" | "keycloak"; next: string }>("/auth/discover", {
+    request<{ method: "sso" | "keycloak"; enforced?: boolean; next: string }>("/auth/discover", {
       method: "POST", body: { email }, retryOn401: false,
     }),
   logout: () => request<{ signed_out: boolean }>("/auth/logout", { method: "POST", withCookies: true, retryOn401: false }),
   /** Prove a second factor again for a sensitive action; the answer carries a fresh access token. */
-  stepUp: (code: { code?: string; recovery_code?: string }) =>
+  stepUp: (code: { code?: string; recovery_code?: string; credential?: Record<string, unknown> }) =>
     request<TokenResponse>("/session/step-up", { method: "POST", body: code, retryOn401: false }),
+  stepUpOptions: () => request<Record<string, any>>("/session/step-up/options", { method: "POST", retryOn401: false }),
+  /** Second step of a sign-in with a passkey. */
+  passkey: (mfa_token: string, credential: Record<string, unknown>) =>
+    request<TokenResponse>("/auth/passkey", { method: "POST", body: { mfa_token, credential }, withCookies: true, retryOn401: false }),
+};
+
+// ---- passkeys ----
+export const passkeys = {
+  list: () => request<{ passkeys: Passkey[]; allowed: boolean }>("/me/passkeys"),
+  options: () => request<Record<string, any>>("/me/passkeys/options", { method: "POST", retryOn401: false }),
+  /** The answer carries a new two-factor session when this was the person's first second factor. */
+  register: (credential: Record<string, unknown>, name: string) =>
+    request<Passkey & { session?: TokenResponse }>("/me/passkeys", { method: "POST", body: { credential, name }, withCookies: true, retryOn401: false }),
+  remove: (id: string) => request<{ removed: string }>(`/me/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
 // ---- an owner's access session inside a tenant ----

@@ -201,3 +201,24 @@ deleting a tenant, placing or lifting a legal hold, adding an owner, changing, d
 **Break-glass.** Exactly one sealed Platform owner account (`python -m scripts.create_break_glass`, database-enforced single account, platform only). Using it alerts every
 other owner (email + `break_glass_used` in the platform log) and sets `must_rotate`: until its password is changed (`POST /me/password`) nothing else works. Changing a password
 (`POST /me/password`, any user) ends all their sessions, issues a fresh one, and notifies them.
+
+## Authentication enforcement (phase 6)
+
+**Every stored security setting is enforced by the API**, and `tests/test_settings_enforcement_e2e.py` proves it (it also fails when a column is added to
+`security_settings` or `platform_settings` without a proof). The three settings that were stored but never used are gone: `sso_enabled` (derived from the verified
+domain), `oidc_issuer` and `oidc_client_id` (the identity provider lives in Keycloak).
+
+**Company single sign-on (`GET/PUT /admin/sso`, Tenant admins, step-up).** A tenant sets its verified domain, Keycloak identity-provider alias, protocol (`oidc`
+or `saml`, both brokered by Keycloak), a default role for new people and whether sign-in is *enforced*. When enforced, password sign-in is refused for every
+member of that domain (the web app asks `/auth/discover` first and sends them to their provider); nothing is enforced until the domain is verified. First sign-in
+creates a membership just in time with the default role (never a locked role), only for an address the provider has verified. One **emergency account** per tenant
+(`PUT/DELETE /admin/sso/emergency`) keeps password + passkey sign-in so a broken provider can't lock a company out; it must be an active Tenant admin who already has a passkey, and setting it is audited.
+
+**Passkeys (WebAuthn).** `/me/passkeys*` to register, list and remove (max 10; an owner can't remove their last passkey while the platform requires one),
+`/auth/passkey` to sign in (as the second step after the password), `/session/step-up/options` for step-up. Challenges are single use and last 5 minutes; the sign
+count is checked. Platform owners must have a passkey (`platform_staff_passkey_only`, default off until each owner has registered one) and until then can do
+nothing but register one. **Tenant admins must use two-factor** (an authenticator app or a passkey); the platform's `passkeys_allowed` setting can switch passkeys off.
+The relying party comes from `APP_URL` (override with `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGINS`).
+
+**API keys.** Keys can expire, be limited to IP ranges and to a rate per minute, show `last_used_at`, and be rotated (`POST /admin/api-keys/{prefix}/rotate`: the new key
+is shown once, the old one keeps working for 24 hours so the caller can switch over). An expired, revoked, out-of-range or over-rate key gets 401/403/429 and an audit entry.

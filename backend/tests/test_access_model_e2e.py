@@ -23,18 +23,23 @@ c = TestClient(app, headers=CSRF, base_url="https://testserver")
 PW = "violet harbour tram sixteen"
 
 
-def add_user(org, role_id, email, status="active"):
+def add_user(org, role_id, email, status="active", secret=None):
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, mfa_enabled, status)
-                       VALUES (%s,%s,%s,%s,%s,%s,false,%s) RETURNING id""",
+        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, mfa_enabled, totp_secret_enc, status)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                     (org, role_id, crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(email.split("@")[0], org, "name"), passwords.hash_password(PW), status))
+                     crypto.encrypt(email.split("@")[0], org, "name"), passwords.hash_password(PW), secret is not None,
+                     crypto.encrypt(secret, org, "totp") if secret else None, status))
         return str(cur.fetchone()[0])
 
 
-def login(email):
+def login(email, secret=None):
     r = c.post("/auth/login", json={"email": email, "password": PW})
     assert r.status_code == 200, r.text
+    if secret:      # every Tenant admin has two-factor
+        import pyotp
+        r = c.post("/auth/mfa", json={"mfa_token": r.json()["mfa_token"], "code": pyotp.TOTP(secret).now()})
+        assert r.status_code == 200, r.text
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 
 
@@ -42,7 +47,8 @@ with pg.tx(platform=True) as cur:
     org, roles = api.provision_org(cur, "Access Test Org", "MSB", "M7000001")
     other, other_roles = api.provision_org(cur, "Other Org", "MSB", "M7000002")
 officer_id = add_user(org, roles["Compliance officer"], "officer@access-check.example.com")
-admin_id = add_user(org, roles[cat.TENANT_ADMIN], "admin@access-check.example.com")
+ADMIN_SECRET = __import__("pyotp").random_base32()
+admin_id = add_user(org, roles[cat.TENANT_ADMIN], "admin@access-check.example.com", secret=ADMIN_SECRET)
 owner_id = add_user(None, cat.PLATFORM_OWNER_ROLE_ID, "owner@access-check.example.com")
 with psycopg.connect(SUPER, autocommit=True) as s:
     roles_by_name = {n: i for i, n in s.execute("SELECT id, name FROM roles WHERE org_id=%s", (org,)).fetchall()}
@@ -95,7 +101,7 @@ cache.get_or_load(("u", 2, "role", True), loader)
 ok(len(calls) == 2, "a session_version bump is a different key, so a stale permission set can never be returned")
 cache.get_or_load(("u", 1, "other-role", True), loader)
 ok(len(calls) == 3, "a different role is a different key")
-A = login("admin@access-check.example.com")
+A = login("admin@access-check.example.com", ADMIN_SECRET)
 cache.clear()
 c.get("/me", headers=A); hits = cache.stats["hits"]; c.get("/me", headers=A)
 ok(cache.stats["hits"] == hits + 1, "repeated requests by the same session reuse the cached permission set")

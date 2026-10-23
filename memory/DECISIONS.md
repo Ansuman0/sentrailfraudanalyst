@@ -51,3 +51,6 @@ Status: accepted. Unreachable chain data or OFAC list → `hold`.
 
 ## Decision: Plain-script backend tests on a throwaway DB (`sentrail_test`)
 Status: accepted. No pytest migration planned; frontend uses Vitest.
+
+## Decision: Phase 6 authentication defaults (access model v2)
+Status: accepted 2026-10-23. Passkeys use py_webauthn; SAML is supported only through the Keycloak broker (`sso_protocol`), so the API has no SAML code. Owner passkey-only (`platform_staff_passkey_only`) defaults off so no owner is locked out before registering; each tenant gets one emergency admin login (password + passkey) when SSO is enforced. An API key being rotated keeps working 24 hours. Every column of `security_settings` / `platform_settings` must map to an enforcement proof in `test_settings_enforcement_e2e.py`.

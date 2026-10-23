@@ -2,8 +2,9 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { Logo } from "../components/Logo";
 import { useAuth } from "../hooks/useAuth";
-import { ApiError } from "../services/http";
+import { ApiError, apiUrl } from "../services/http";
 import { auth } from "../services/sentrail";
+import { getPasskey, passkeyErrorMessage, passkeysSupported } from "../services/webauthn";
 import { safeReturnPath } from "../utils/format";
 
 // Codes the API puts on /signin?error= after a failed OIDC sign-in (app/admin_api.py _fail()).
@@ -23,6 +24,8 @@ export function SignIn() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mfaToken, setMfaToken] = useState("");
+  const [methods, setMethods] = useState<("totp" | "passkey")[]>(["totp"]);
+  const [passkeyOptions, setPasskeyOptions] = useState<Record<string, any> | null>(null);
   const [code, setCode] = useState("");
   const [useRecovery, setUseRecovery] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,6 +51,12 @@ export function SignIn() {
     setError(null);
     setBusy(true);
     try {
+      // A company that requires single sign-on has no password sign-in: go to its identity provider.
+      const d = await auth.discover(email.trim()).catch(() => null);
+      if (d?.enforced) {
+        window.location.assign(apiUrl(d.next) + "&" + new URLSearchParams({ return_to: returnTo }));
+        return;
+      }
       const r = await auth.login(email.trim(), password);
       setPassword(""); // don't keep the password in memory longer than needed
       if ("access_token" in r) {
@@ -55,9 +64,30 @@ export function SignIn() {
         return;
       }
       setMfaToken(r.mfa_token);
+      setMethods(r.methods ?? ["totp"]);
+      setPasskeyOptions(r.passkey_options ?? null);
       setStep("mfa");
     } catch (err) {
       fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function usePasskey() {
+    if (!passkeyOptions) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await auth.passkey(mfaToken, await getPasskey(passkeyOptions));
+      await completeSignIn(r.access_token);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        fail(err);
+        if (err.message.startsWith("Sign-in expired")) setStep("password");
+      } else {
+        setError(passkeyErrorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -104,6 +134,16 @@ export function SignIn() {
           </form>
         ) : (
           <form onSubmit={submitCode} noValidate>
+            {methods.includes("passkey") && passkeysSupported() && (
+              <>
+                <p className="lsub">Confirm with your passkey: your device's fingerprint, face or PIN, or your security key.</p>
+                <button type="button" className="btn primary full" disabled={busy} onClick={() => void usePasskey()}>
+                  {busy ? "Waiting for your device…" : "Use your passkey"}
+                </button>
+                {error && <div className="err" role="alert">{error}</div>}
+              </>
+            )}
+            {methods.includes("totp") && (<>
             <p className="lsub">
               {useRecovery ? "Enter one of your recovery codes." : "Enter the 6-digit code from your authenticator app."}
             </p>
@@ -118,6 +158,7 @@ export function SignIn() {
             <button type="button" className="linkbtn lforgot" onClick={() => { setUseRecovery(!useRecovery); setCode(""); }}>
               {useRecovery ? "Use an authenticator code instead" : "Use a recovery code"}
             </button>
+            </>)}
           </form>
         )}
       </div>

@@ -20,6 +20,7 @@ import { Search } from "./pages/Search";
 import { Security } from "./pages/Security";
 import { SignedOut, SignIn } from "./pages/SignIn";
 import { Sso } from "./pages/Sso";
+import { SetupPasskey } from "./pages/SetupPasskey";
 import { TwoFactorSetup } from "./pages/TwoFactorSetup";
 import { Users } from "./pages/Users";
 import { WalletTrace } from "./pages/WalletTrace";
@@ -43,6 +44,7 @@ export function App() {
       <Route path="/signed-out" element={<SignedOut />} />
       <Route path="/join" element={<Join />} />
       <Route path="/setup-2fa" element={<RequireAuth><TwoFactorSetup /></RequireAuth>} />
+      <Route path="/setup-passkey" element={<RequireAuth><SetupPasskey /></RequireAuth>} />
       <Route path="/choose-tenant" element={<RequireAuth><ChooseTenant /></RequireAuth>} />
       <Route path="/no-access" element={<RequireAuth><NoAccess /></RequireAuth>} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>

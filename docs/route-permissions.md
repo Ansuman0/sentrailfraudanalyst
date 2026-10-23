@@ -12,6 +12,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/admin/api-keys` | `apikeys.manage` |
 | POST | `/admin/api-keys` | `apikeys.manage` |
 | DELETE | `/admin/api-keys/{prefix}` | `apikeys.manage` |
+| POST | `/admin/api-keys/{prefix}/rotate` | `apikeys.manage` |
 | GET | `/admin/audit` | any of `audit.view`, `platform.audit.view` |
 | GET | `/admin/audit/verify` | any of `audit.view`, `platform.audit.view` |
 | GET | `/admin/features` | `features.manage` |
@@ -22,7 +23,10 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | PUT | `/admin/roles/{role_id}` | `roles.manage` |
 | GET | `/admin/security` | `security.manage` |
 | PUT | `/admin/security` | `security.manage` |
+| GET | `/admin/sso` | `security.manage` |
 | PUT | `/admin/sso` | `security.manage` |
+| DELETE | `/admin/sso/emergency` | `security.manage` |
+| PUT | `/admin/sso/emergency` | `security.manage` |
 | POST | `/admin/sso/verify` | `security.manage` |
 | GET | `/admin/users` | `users.manage` |
 | PATCH | `/admin/users/{uid}` | `users.manage` |
@@ -36,6 +40,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/auth/oidc/callback` | public (before sign-in) |
 | GET | `/auth/oidc/login` | public (before sign-in) |
 | GET | `/auth/oidc/logout` | public (before sign-in) |
+| POST | `/auth/passkey` | public (before sign-in) |
 | POST | `/auth/refresh` | public (before sign-in) |
 | GET | `/cases/{alert_id}` | `cases.view` |
 | GET | `/cases/{alert_id}/access` | `cases.restricted.view` |
@@ -54,6 +59,10 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | DELETE | `/me/access-session` | signed in (own account only) |
 | POST | `/me/mfa/confirm` | signed in (own account only) |
 | POST | `/me/mfa/setup` | signed in (own account only) |
+| GET | `/me/passkeys` | signed in (own account only) |
+| POST | `/me/passkeys` | signed in (own account only) |
+| POST | `/me/passkeys/options` | signed in (own account only) |
+| DELETE | `/me/passkeys/{passkey_id}` | signed in (own account only) |
 | POST | `/me/password` | signed in (own account only) |
 | GET | `/me/sessions` | signed in (own account only) |
 | POST | `/me/sessions/end-others` | signed in (own account only) |
@@ -94,6 +103,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | POST | `/screenings/{sid}/override` | `screening.override` |
 | GET | `/search` | `cases.view` |
 | POST | `/session/step-up` | signed in (own account only) |
+| POST | `/session/step-up/options` | signed in (own account only) |
 | POST | `/session/tenant` | signed in (own account only) |
 | POST | `/upload` | `cases.decide` |
 | GET | `/wallets/{address}/trace` | `wallet.trace` |

@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ErrorBox, Loading, PageHeader } from "../components/common";
 import { useAuth } from "../hooks/useAuth";
-import { me as meApi } from "../services/sentrail";
+import { PasskeyRegister } from "../components/PasskeyRegister";
+import { me as meApi, passkeys as passkeysApi } from "../services/sentrail";
 import { fmtDateTime } from "../utils/format";
 
 export function Account() {
@@ -12,6 +13,8 @@ export function Account() {
   const done = () => qc.invalidateQueries({ queryKey: ["sessions"] });
   const end = useMutation({ mutationFn: meApi.endSession, onSuccess: done });
   const endOthers = useMutation({ mutationFn: meApi.endOthers, onSuccess: done });
+  const keys = useQuery({ queryKey: ["passkeys"], queryFn: passkeysApi.list });
+  const dropKey = useMutation({ mutationFn: passkeysApi.remove, onSuccess: () => qc.invalidateQueries({ queryKey: ["passkeys"] }) });
   if (!me) return null;
   const others = sessions.data?.filter((s) => !s.current).length ?? 0;
 
@@ -38,6 +41,23 @@ export function Account() {
             <>
               <p className="sub">Off. Turning it on is your choice: you scan a QR code with an authenticator app, then sign in with a code as well as your password. It's needed to approve STRs, export cases, change the screening policy and override held screenings.</p>
               <div className="actions"><Link className="btn primary" to="/setup-2fa?return_to=%2Faccount">Turn on two-factor</Link></div>
+            </>
+          )}
+          <h2 className="mt">Passkeys</h2>
+          {keys.isPending ? <Loading /> : keys.isError ? <ErrorBox error={keys.error} /> : !keys.data.allowed ? (
+            <p className="sub">Passkeys are switched off on this platform.</p>
+          ) : (
+            <>
+              <p className="sub">A passkey is a second factor you unlock with your device's fingerprint, face or PIN. It can't be phished, and Platform owners must use one.</p>
+              {keys.data.passkeys.map((k) => (
+                <div key={k.id} className="sess">
+                  <span>{k.name}</span>
+                  <button className="linkbtn" disabled={dropKey.isPending} onClick={() => dropKey.mutate(k.id)}>Remove</button>
+                  <small>added {fmtDateTime(k.created_at)}{k.last_used_at ? ` · used ${fmtDateTime(k.last_used_at)}` : " · never used"}</small>
+                </div>
+              ))}
+              {dropKey.isError && <ErrorBox error={dropKey.error} />}
+              <PasskeyRegister onDone={() => qc.invalidateQueries({ queryKey: ["passkeys"] })} />
             </>
           )}
           <h2 className="mt">Permissions</h2>

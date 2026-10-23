@@ -15,7 +15,7 @@ PUBLIC: set[tuple[str, str]] = {
     ("GET", "/healthz"), ("GET", "/readyz"),
     ("POST", "/auth/login"), ("POST", "/auth/mfa"), ("POST", "/auth/refresh"), ("POST", "/auth/discover"), ("POST", "/auth/logout"),
     ("GET", "/auth/oidc/login"), ("GET", "/auth/oidc/callback"), ("GET", "/auth/oidc/logout"),
-    ("POST", "/invitations/accept"),
+    ("POST", "/invitations/accept"), ("POST", "/auth/passkey"),
 }
 
 # Signed-in routes that need no permission because they only concern the caller's own account.

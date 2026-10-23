@@ -25,3 +25,4 @@ slowapi
 email-validator
 dnspython
 pyarrow
+webauthn==2.*

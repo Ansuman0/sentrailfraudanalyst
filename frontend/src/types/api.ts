@@ -32,6 +32,9 @@ export interface Me {
   access_session?: { id: string; expires_at: string; reason: string; extended: boolean } | null;
   /** The break-glass account was just used: the password has to be changed before anything else. */
   must_rotate?: boolean;
+  /** Number of passkeys registered, and whether the platform makes this owner register one before anything else. */
+  passkeys?: number;
+  must_enroll_passkey?: boolean;
   /** Where this person can work (access model v2). The header offers a switcher when there is more than one. */
   tenants?: TenantChoice[];
 }
@@ -178,7 +181,7 @@ export interface TokenResponse {
 
 /** POST /auth/login: a code is needed (two-factor on), or a password-only session (two-factor not set up yet). */
 export type LoginResponse =
-  | { mfa_token: string; next: string }
+  | { mfa_token: string; next: string; methods?: ("totp" | "passkey")[]; passkey_options?: Record<string, any> }
   | (TokenResponse & { mfa_enabled: false; route?: SignInRoute; tenants?: TenantChoice[] });
 
 /** Where a fresh sign-in lands: the console, one tenant, the tenant picker, or the no-access page. */
@@ -240,4 +243,11 @@ export interface SecuritySettings {
   ip_allowlist: string[];
   retention_years: number;
   encryption: { algorithm: string; current_key: string; key_manager: string };
+}
+
+export interface Passkey {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
 }

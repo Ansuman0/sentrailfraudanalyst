@@ -37,7 +37,7 @@ def _now(): return datetime.now(timezone.utc)
 
 def issue_access(user_id, org_id, role_id, session_version: int, mfa: bool, ttl: timedelta | None = None,
                  session_id=None, scope: str | None = None, last_mfa_at: datetime | None = None,
-                 platform_role_id=None, access_session_id=None) -> str:
+                 platform_role_id=None, access_session_id=None, factor: str = "totp") -> str:
     """ttl defaults to ACCESS_TTL; it is shortened when the organization's idle timeout is shorter,
     so an active user always refreshes inside the idle window. session_id is the refresh-token family,
     so /me/sessions can tell which session is the caller's (the refresh cookie is only sent to /auth).
@@ -52,7 +52,7 @@ def issue_access(user_id, org_id, role_id, session_version: int, mfa: bool, ttl:
     return jwt.encode({"sub": str(user_id), "org": str(org_id) if org_id else None, "tid": str(org_id) if org_id else None,
                        "rid": str(role_id), "prid": str(platform_role_id) if platform_role_id else None,
                        "asid": str(access_session_id) if access_session_id else None,
-                       "sv": session_version, "amr": ["pwd", "otp"] if mfa else ["pwd"],
+                       "sv": session_version, "amr": (["pwd", "hwk"] if factor == "passkey" else ["pwd", "otp"]) if mfa else ["pwd"],
                        "lmfa": int(last_mfa_at.timestamp()) if last_mfa_at else None, "scp": scope,
                        "sid": str(session_id) if session_id else None,
                        "iat": now, "exp": now + ttl, "aud": AUDIENCE, "iss": ISSUER,

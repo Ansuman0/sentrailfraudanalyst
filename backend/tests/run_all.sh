@@ -55,7 +55,7 @@ OWNER_PASSWORD="$OWNER_PASSWORD" $PYTHON tests/test_access_model_migration.py > 
 echo "== access_migration"; echo "$(grep -c '^PASS' "$OUT/sentrail_access_migration.full") passed"
 grep '^FAIL' "$OUT/sentrail_access_migration.full" && status=1
 grep -q Traceback "$OUT/sentrail_access_migration.full" && { tail -5 "$OUT/sentrail_access_migration.full"; status=1; }
-for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local" "access_model_e2e local" "signin_session_e2e local" "authorization_e2e local" "tenant_lifecycle_e2e local" "owner_access_e2e local" "isolation_e2e local"; do
+for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local" "access_model_e2e local" "signin_session_e2e local" "authorization_e2e local" "tenant_lifecycle_e2e local" "owner_access_e2e local" "api_keys_e2e local" "passkeys_e2e local" "sso_e2e local" "settings_enforcement_e2e local" "isolation_e2e local"; do
   set -- $t; fresh; echo "== $1"
   AUTH_MODE=$2 $PYTHON tests/test_$1.py > "$OUT/sentrail_$1.full" 2>&1 || status=1
   echo "$(grep -c '^PASS' "$OUT/sentrail_$1.full") passed"

@@ -33,9 +33,9 @@ def chain(org):
 with pg.tx(platform=True) as cur:
     A, ar = provision_org(cur, "Access Alpha", "MSB", "M3000001", plan="enterprise")
     B, br = provision_org(cur, "Access Beta", "MSB", "M3000002", plan="enterprise")
-S = {n: pyotp.random_base32() for n in ("owner1", "admin_a", "support")}
+S = {n: pyotp.random_base32() for n in ("owner1", "owner2", "admin_a", "support")}
 owner1 = add_user(None, cat.PLATFORM_OWNER_ROLE_ID, "owner1@access5.example.com", secret=S["owner1"])
-owner2 = add_user(None, cat.PLATFORM_OWNER_ROLE_ID, "owner2@access5.example.com")
+owner2 = add_user(None, cat.PLATFORM_OWNER_ROLE_ID, "owner2@access5.example.com", secret=S["owner2"])
 add_user(None, cat.PLATFORM_SUPPORT_ROLE_ID, "support@access5.example.com", secret=S["support"])
 admin_a = add_user(A, ar[cat.TENANT_ADMIN], "admin@access5.example.com", secret=S["admin_a"])
 analyst_a = add_user(A, ar["Compliance analyst"], "analyst@access5.example.com")
@@ -48,7 +48,7 @@ with pg.tx(B) as cur:
     cur.execute("""INSERT INTO alerts (id, org_id, customer_id, score, band, reasons, channel) VALUES ('OB-1', %s, 'C-2', 70, 'high', '[]', 'bank')""", (B,))
 
 O1 = bearer(two_factor_token(c, "owner1@access5.example.com", S["owner1"]))     # signed in once; the session moves between console and tenants
-O2 = bearer(password_token(c, "owner2@access5.example.com"))
+O2 = bearer(two_factor_token(c, "owner2@access5.example.com", S["owner2"]))      # inside a tenant an owner is a Tenant admin: two-factor
 SUP = bearer(two_factor_token(c, "support@access5.example.com", S["support"]))
 ADMIN = bearer(two_factor_token(c, "admin@access5.example.com", S["admin_a"]))
 ANALYST = bearer(password_token(c, "analyst@access5.example.com"))
@@ -120,7 +120,9 @@ r = c.delete(f"/platform/access/{SIDX}", headers=tok_state["o1"])
 ok(r.status_code == 200, "owner 1 ends owner 2's session")
 r = c.get("/alerts", headers=tok_state["o2"])
 ok(r.status_code == 401, "owner 2 is out at their next request")
-tok_state["o2"] = bearer(password_token(c, "owner2@access5.example.com"))
+r = c.post("/auth/login", json={"email": "owner2@access5.example.com", "password": PW})
+r = c.post("/auth/mfa", json={"mfa_token": r.json()["mfa_token"], "code": code_at(S["owner2"], 1)})
+tok_state["o2"] = bearer(r.json()["access_token"])
 O2 = tok_state["o2"]
 
 # expiry

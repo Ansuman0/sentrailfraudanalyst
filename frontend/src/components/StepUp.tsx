@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, setAccessToken, setStepUpHandler } from "../services/http";
+import { useAuth } from "../hooks/useAuth";
 import { auth } from "../services/sentrail";
+import { getPasskey, passkeyErrorMessage, passkeysSupported } from "../services/webauthn";
 
 /**
  * Step-up: the API answers 401 {"error": "step_up_required"} when a sensitive action needs a fresh second factor. http.ts
@@ -43,6 +45,21 @@ function StepUpDialog({ onDone }: { onDone: (ok: boolean) => void }) {
   const [useRecovery, setUseRecovery] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { me } = useAuth();
+  const hasPasskey = (me?.passkeys ?? 0) > 0 && passkeysSupported();
+
+  async function withPasskey() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await auth.stepUp({ credential: await getPasskey(await auth.stepUpOptions()) });
+      setAccessToken(r.access_token);
+      onDone(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? "That passkey didn't work. Try again." : passkeyErrorMessage(err));
+      setBusy(false);
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -65,6 +82,11 @@ function StepUpDialog({ onDone }: { onDone: (ok: boolean) => void }) {
         <p className="sub">
           {useRecovery ? "Enter one of your recovery codes." : "This action needs a fresh check. Enter the 6-digit code from your authenticator app."}
         </p>
+        {hasPasskey && (
+          <div className="actions">
+            <button type="button" className="btn primary" disabled={busy} onClick={() => void withPasskey()}>Use your passkey</button>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="stepup-code">{useRecovery ? "Recovery code" : "Authenticator code"}</label>
           <input id="stepup-code" autoFocus autoComplete="one-time-code" inputMode={useRecovery ? "text" : "numeric"}

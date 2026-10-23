@@ -15,6 +15,10 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     if (location.pathname !== to) return <Navigate to={to} replace />;
     return <>{children}</>;
   }
+  if (me?.must_enroll_passkey) {
+    if (location.pathname !== "/setup-passkey") return <Navigate to="/setup-passkey" replace />;
+    return <>{children}</>;
+  }
   if (mfaGate && location.pathname !== "/setup-2fa") {
     return <Navigate to={`/setup-2fa?return_to=${encodeURIComponent(back)}`} replace />;
   }

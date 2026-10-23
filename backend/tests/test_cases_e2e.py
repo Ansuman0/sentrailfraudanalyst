@@ -260,8 +260,9 @@ NM = {"Authorization": "Bearer " + r.json()["access_token"]}
 
 ca = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
 NA = {"Authorization": "Bearer " + ca.post("/auth/login", json={"email": "nomfa.admin@northwind.ca", "password": PW}).json()["access_token"]}
-ok(ca.get("/me", headers=NA).json()["mfa_setup"] == "optional" and ca.get("/admin/users", headers=NA).status_code == 200,
-   "nobody is forced: an organization admin without two-factor works normally while the organization hasn't made it mandatory")
+r = ca.get("/admin/users", headers=NA)
+ok(ca.get("/me", headers=NA).json()["mfa_setup"] == "required" and r.status_code == 403 and "two-factor" in r.json()["detail"].lower(),
+   "a Tenant admin must use two-factor even where the organization hasn't made it mandatory (the role holds every permission)")
 
 ok(c.put("/admin/security", headers=A, json={"mfa_required": True}).status_code == 200, "the org admin makes two-factor mandatory")
 r = cm.get("/alerts", headers=NM)

@@ -7,6 +7,7 @@ IP allowlist and idle policy -> check permission and feature -> run in tenant sc
 import ipaddress
 import os
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -17,7 +18,7 @@ import logging
 
 from app import config, pg
 from app.access import cache, catalogue
-from app.security import tokens, crypto
+from app.security import tokens, crypto, passkeys
 
 log = logging.getLogger("sentrail.access")
 
@@ -40,6 +41,8 @@ class Principal:
     scope: str = "tenant"           # "tenant" | "platform" | "select" (signed in, tenant not chosen yet)
     access_session_id: str | None = None   # a platform owner working inside a tenant through an access session
     must_rotate: bool = False       # the break-glass account was just used: the password has to be changed first
+    must_enroll_passkey: bool = False   # a Platform owner while the platform requires passkeys and they have none yet
+    passkey_count: int = 0
     selecting: bool = False         # scope == "select": only /me, /me/tenants and /session/* are available
     last_mfa_at: int | None = None  # epoch seconds of the last second-factor check in this session (step-up)
 
@@ -134,7 +137,7 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             u = cur.fetchone()
         if not u or u[0] != "active" or u[1] != c["sv"] or not _session_alive(c.get("sid")):
             raise HTTPException(401, "Your session has ended. Sign in again")
-        return Principal(c["sub"], None, "", set(), set(), ip, session_id=c.get("sid"), mfa="otp" in c.get("amr", []),
+        return Principal(c["sub"], None, "", set(), set(), ip, session_id=c.get("sid"), mfa=second_factor_used(c),
                          scope="select", selecting=True, last_mfa_at=c.get("lmfa"))
     with pg.tx(c["org"], platform=c["org"] is None, actor=c["sub"]) as cur:
         cur.execute("SELECT status, session_version, role_id, mfa_enabled, keycloak FROM session_user_lookup(%s)", (c["sub"],))
@@ -142,9 +145,15 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
         status, sv, role_id, mfa_enabled, idp = u
-        cur.execute("SELECT mfa_mandatory, must_rotate FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
-        own = cur.fetchone() or (False, False)
-        mandatory, must_rotate = bool(own[0]), bool(own[1])
+        user_role_id = role_id
+        cur.execute("SELECT mfa_mandatory, must_rotate, break_glass FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
+        own = cur.fetchone() or (False, False, False)
+        mandatory, must_rotate, break_glass = bool(own[0]), bool(own[1]), bool(own[2])
+        cur.execute("SELECT passkeys_allowed, platform_staff_passkey_only FROM platform_settings")
+        passkeys_allowed, passkey_only = cur.fetchone()
+        n_pk = passkeys.count(cur, c["sub"]) if passkeys_allowed else 0
+        is_owner = str(user_role_id) == catalogue.PLATFORM_OWNER_ROLE_ID
+        must_enroll = bool(passkeys_allowed and passkey_only and is_owner and not break_glass and n_pk == 0)
         asid = c.get("asid")
         if asid:
             # An owner inside a tenant: the access session must still be live, and the owner acts with Tenant admin rights.
@@ -200,21 +209,29 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             allow, org_requires = (r[0], r[1]) if r else ([], False)
     if allow and (ip is None or not any(ipaddress.ip_address(ip) in ipaddress.ip_network(str(n)) for n in allow)):
         raise HTTPException(403, "Access isn't allowed from this network")
-    if mandatory:
-        org_requires = True       # accepted an invitation as Tenant admin: two-factor is not optional for them
+    if mandatory or (c["org"] and row[2] == catalogue.TENANT_ADMIN):
+        org_requires = True       # every Tenant admin (the role holds every tenant permission): two-factor is not optional for them
     if not c["org"] and row[2] != "Platform owner":
         org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
     perms, alias_names = catalogue.expand_aliases(set(row[3]))
-    mfa_used = "otp" in c.get("amr", [])
-    if row[4] and not mfa_used:
+    mfa_used = second_factor_used(c)
+    has_second = bool(row[4]) or n_pk > 0          # an authenticator app or at least one passkey
+    if has_second and not mfa_used:
         # Two-factor is on for this account, so a password-only session isn't enough (enabling it ends those sessions).
         raise HTTPException(401, "Two-factor verification required")
     return Principal(c["sub"], c["org"], row[2], perms, features, ip, session_id=c.get("sid"), mfa=mfa_used,
-                     mfa_setup=mfa_setup_state(org_requires, row[4], row[5]), alias_names=alias_names,
-                     scope=scope, last_mfa_at=c.get("lmfa"), access_session_id=asid, must_rotate=must_rotate)
+                     mfa_setup=mfa_setup_state(org_requires, has_second, row[5]), alias_names=alias_names,
+                     scope=scope, last_mfa_at=c.get("lmfa"), access_session_id=asid, must_rotate=must_rotate,
+                     must_enroll_passkey=must_enroll, passkey_count=n_pk)
 
 
 ROTATE_MESSAGE = "This sign-in must change its password first (POST /me/password)"
+ENROLL_PASSKEY_MESSAGE = "Platform owners must use a passkey. Register one first (POST /me/passkeys/options)"
+
+
+def second_factor_used(claims) -> bool:
+    """The sign-in proved a second factor: an authenticator code or recovery code ("otp") or a passkey ("hwk")."""
+    return bool({"otp", "hwk"} & set(claims.get("amr", [])))
 
 
 def current_user(p: Principal = Depends(signed_in_user)) -> Principal:
@@ -223,6 +240,8 @@ def current_user(p: Principal = Depends(signed_in_user)) -> Principal:
         raise HTTPException(403, "Choose a tenant first")
     if p.must_rotate:
         raise HTTPException(403, ROTATE_MESSAGE)
+    if p.must_enroll_passkey:
+        raise HTTPException(403, ENROLL_PASSKEY_MESSAGE)
     if not p.mfa and p.mfa_setup != "optional":
         raise HTTPException(403, SETUP_REQUIRED)
     return p
@@ -247,6 +266,21 @@ def require(*perms: str, feature: str | None = None):
     return dep
 
 
+_key_windows: dict[str, list] = {}       # prefix -> [minute, requests this minute]; per process (one host today)
+
+
+def _within_rate_limit(prefix: str, limit: int) -> bool:
+    minute = int(time.time() // 60)
+    w = _key_windows.get(prefix)
+    if not w or w[0] != minute:
+        w = _key_windows[prefix] = [minute, 0]
+    w[1] += 1
+    if len(_key_windows) > 5000:                      # forget keys not seen this minute (memory stays flat)
+        for k in [k for k, v in _key_windows.items() if v[0] != minute]:
+            _key_windows.pop(k, None)
+    return w[1] <= limit
+
+
 def api_key(request: Request) -> Principal:
     """Machine access for the on/off-ramp: 'Authorization: Bearer sk_live_<prefix>_<secret>'."""
     auth = request.headers.get("authorization", "")
@@ -255,10 +289,15 @@ def api_key(request: Request) -> Principal:
     key = auth.removeprefix("Bearer ")
     prefix = "_".join(key.split("_")[:3])
     with pg.pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT org_id, key_hash, scopes FROM api_key_lookup(%s)", (prefix,))
+        cur.execute("SELECT org_id, key_hash, scopes, expires_at, ip_allowlist, rate_limit_per_min FROM api_key_lookup(%s)", (prefix,))
         row = cur.fetchone()
     if not row or not crypto.hmac.compare_digest(bytes(row[1]), crypto.sha256(key)) or "screen" not in row[2]:
         raise HTTPException(401, "Invalid API key")
+    if row[3] is not None and row[3] <= datetime.now(timezone.utc):
+        raise HTTPException(401, "This API key has expired. Ask your administrator for a new one")
+    caller = client_ip(request)
+    if row[4] and (caller is None or not any(ipaddress.ip_address(caller) in ipaddress.ip_network(str(n)) for n in row[4])):
+        raise HTTPException(403, "This API key can't be used from this address")
     # A valid key isn't enough: the organization must be live and still have screening switched on.
     with pg.tx(row[0]) as cur:
         cur.execute("SELECT status FROM organizations WHERE id=%s", (row[0],))
@@ -269,6 +308,11 @@ def api_key(request: Request) -> Principal:
         raise HTTPException(403, "This organization isn't active")
     if not screening_on:
         raise HTTPException(403, "Screening isn't turned on for this organization")
+    if not _within_rate_limit(prefix, row[5]):
+        raise HTTPException(429, f"This API key is limited to {row[5]} requests a minute", headers={"Retry-After": "30"})
+    with pg.tx(row[0]) as cur:      # at most one write a minute per key
+        cur.execute("""UPDATE api_keys SET last_used_at=now() WHERE prefix=%s
+                       AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')""", (prefix,))
     return Principal(user_id=f"api:{prefix}", org_id=str(row[0]), role="api", perms={"screen"},
                      features={"screening"}, ip=client_ip(request), kind="api_key")
 

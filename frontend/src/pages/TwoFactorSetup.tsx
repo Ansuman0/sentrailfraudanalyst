@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ErrorBox } from "../components/common";
+import { PasskeyRegister } from "../components/PasskeyRegister";
 import { QrCode } from "../components/QrCode";
 import { Logo } from "../components/Logo";
 import { useAuth } from "../hooks/useAuth";
@@ -71,6 +72,9 @@ export function TwoFactorSetup() {
           <button className="btn primary full" disabled={busy} onClick={() => void start()}>
             {busy ? "Starting…" : "Set up now"}
           </button>
+          <div className="lor">or</div>
+          <p className="lsub">Use a passkey instead: your device's fingerprint, face or PIN.</p>
+          <PasskeyRegister />
           {required ? (
             <button type="button" className="linkbtn lforgot" onClick={() => void signOut()}>Sign out</button>
           ) : (

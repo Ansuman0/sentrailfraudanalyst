@@ -36,6 +36,9 @@ MESSAGES = {
     "break_glass_used": ("The break-glass owner account was just used",
                          "The sealed break-glass account of the Sentrail platform was used to sign in{where}. If this was planned, "
                          "no action is needed. If not, treat it as a security incident. The account's password must now be rotated."),
+    "passkey_registered": ("A passkey was added to your Sentrail account",
+                           "A passkey ({where}) was added to your Sentrail account as a second factor.\n\n"
+                           "If this wasn't you, contact your administrator immediately."),
     "role_changed": ("Your Sentrail role was changed",
                      "Your role in Sentrail was changed{where}. Your access updates the next time you sign in.\n\n"
                      "If you didn't expect this, contact your administrator."),
