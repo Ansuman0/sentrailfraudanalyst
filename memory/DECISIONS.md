@@ -3,6 +3,13 @@
 Newest first. Don't reverse one without a stated reason and a new entry. Longer context is in
 [PROJECT_MEMORY.md](PROJECT_MEMORY.md).
 
+## Decision: Access model v2 (memberships, one Platform owner, locked Tenant admin), built in phases behind `ACCESS_MODEL_V2`
+Date: 2026-10-23 · Status: accepted (requested by the user; brief in the conversation, discovery in [docs/access-control-current-state.md](../docs/access-control-current-state.md))
+Decision: Keep the physical `organizations`/`org_id` names ("tenant" in new tables, API and UI); two-factor mandatory for Tenant admins and passkey-only owners (supersedes "two-factor optional" for those roles, from Phase 2/6); Tenant admin holds every tenant permission; Platform owner holds an explicit generated list, not a literal `*`; identity data (email, name, phone, authenticator secret) is encrypted per user, case data stays per organization; a separate worker container will run scheduled jobs (Phase 7); migrations reach the AWS host only at the Phase 9 cut-over, after a test on a copy. One permission catalogue (`backend/app/access/catalogue.py`) generates seeds, sync and docs/permissions.md.
+Reason: A person must belong to several tenants; platform staff must reach tenant data only through audited sessions; access rules need one reviewable source.
+Alternatives: physical rename to tenant*; literal `*` permission; scheduler thread inside the API; applying migrations phase by phase on the live host.
+Impact: Phase 1 (done on branch `access-v2/phase-1`, not merged to main): migration 009 + down, catalogue, memberships, per-user encryption. Pushing 009 to main would run it on the AWS database at the next deploy, so it waits for the cut-over.
+
 ## Decision: AWS deploy = GitHub OIDC → ECR → SSM Run Command on one EC2 host; backend and frontend versioned separately
 Date: 2026-10-18 · Status: accepted (requested by the user: choose service in GitHub, rollback to previous version)
 Decision: Images tagged with the commit SHA per service; host keeps a per-service history and `.deploy.env` tags; `.env` lives only in Secrets Manager; no SSH, no stored AWS keys; only `main` can deploy.

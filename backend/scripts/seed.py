@@ -18,9 +18,9 @@ import sys
 from app import config, pg
 from app.admin_api import provision_org, AUTH_MODE, kc, FEATURES
 from app.security import crypto, passwords, audit
+from app.access.catalogue import TENANT_ADMIN
 
 PLATFORM_ROLES = {"Platform owner": "00000000-0000-0000-0000-000000000002",
-                  "Platform admin": "00000000-0000-0000-0000-000000000001",
                   "Platform support": "00000000-0000-0000-0000-000000000003",
                   "Platform auditor": "00000000-0000-0000-0000-000000000004"}
 PLATFORM_ROLE = PLATFORM_ROLES["Platform owner"]     # the master login is a platform owner
@@ -46,27 +46,27 @@ def seed_master():
                        mfa_enabled, status, auth_method)
                        VALUES (NULL,%s,%s,%s,%s,%s,false,'active','local')""",
                     (PLATFORM_ROLE, crypto.encrypt(crypto.normalize_email(email), None, "email"),
-                     crypto.blind_index(email), crypto.encrypt("Platform admin", None, "name"),
+                     crypto.blind_index(email), crypto.encrypt("Platform owner", None, "name"),
                      passwords.hash_password(pw)))
         audit.write(cur, None, None, "operator", "master_login_seeded", crypto.mask_email(email), {})
     print("\nMaster login created:", crypto.mask_email(email))
     print("Two-factor is off; turn it on from My account after signing in.")
 
 
-DEMO_PLATFORM_STAFF = [("dev.k@sentrail.qatech.world", "Dev K.", "Platform admin"),
+DEMO_PLATFORM_STAFF = [("dev.k@sentrail.qatech.world", "Dev K.", "Platform owner"),
                        ("priya.n@sentrail.qatech.world", "Priya N.", "Platform support"),
                        ("omar.f@sentrail.qatech.world", "Omar F.", "Platform auditor")]
 
 DEMO = [
     {"name": "Northwind Remit Inc.", "type": "MSB: remittance, FX", "reg": "M23456789", "env": "production", "plan": "enterprise",
      "color": "#0F6E56", "sso_domain": None, "idp_alias": None,
-     "users": [("leah.chen@sentrail.qatech.world", "Leah Chen", "Organization admin"),
+     "users": [("leah.chen@sentrail.qatech.world", "Leah Chen", TENANT_ADMIN),
                ("ansuman.p@sentrail.qatech.world", "Ansuman P.", "Compliance officer"),
                ("ravi.k@sentrail.qatech.world", "Ravi K.", "Compliance analyst"),
                ("marta.g@sentrail.qatech.world", "Marta G.", "Auditor (read-only)")]},
     {"name": "Maple Ridge Digital Assets", "type": "MSB: virtual currency dealer", "reg": "M24567810", "env": "sandbox", "plan": "professional",
      "color": "#993C1D", "sso_domain": None, "idp_alias": None,
-     "users": [("amir.h@sentrail.qatech.world", "Amir H.", "Organization admin"),
+     "users": [("amir.h@sentrail.qatech.world", "Amir H.", TENANT_ADMIN),
                ("chloe.b@sentrail.qatech.world", "Chloé B.", "Compliance officer")]},
 ]
 ALERTS = [("A-1042", "C-2291", 87, "high", "12 new senders in 5 days, then funds sent to a crypto wallet", "bank,crypto"),

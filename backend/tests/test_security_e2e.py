@@ -27,7 +27,7 @@ def code_after(secret, last_step=0):
 secret = mfa.new_secret()
 with pg.tx(platform=True) as cur:
     cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, totp_secret_enc, mfa_enabled, status)
-                   VALUES (NULL,'00000000-0000-0000-0000-000000000001',%s,%s,%s,%s,%s,true,'active')""",
+                   VALUES (NULL,'00000000-0000-0000-0000-000000000002',%s,%s,%s,%s,%s,true,'active')""",
                 (crypto.encrypt("ops@sentrail.dev", None, "email"), crypto.blind_index("ops@sentrail.dev"),
                  crypto.encrypt("Sentrail Ops", None, "name"), passwords.hash_password("platform passphrase long enough"),
                  crypto.encrypt(secret, None, "totp")))
@@ -102,7 +102,7 @@ ok(c.get("/admin/users", headers=R).status_code == 403, "analyst can't open user
 me = [u for u in c.get("/admin/users", headers=A1).json() if u["name"]=="Leah Chen"][0]
 r = c.patch(f"/admin/users/{me['id']}", headers=A1, json={"status":"suspended"})
 ok(r.status_code == 403, "admin can't suspend themselves")
-r = c.put(f"/admin/roles/{roles['Organization admin']}", headers=A1, json={"name":"Organization admin","perms":["users.manage","roles.manage","cases.decide"]})
+r = c.put(f"/admin/roles/{roles['Tenant admin']}", headers=A1, json={"name":"Tenant admin","perms":["users.manage","roles.manage","cases.decide"]})
 ok(r.status_code == 403, "admin can't change permissions of their own role (no self-escalation)")
 r = c.put(f"/admin/roles/{roles['Compliance analyst']}", headers=A1, json={"name":"Compliance analyst","perms":["cases.view","orgs.manage"]})
 ok(r.status_code == 422, "platform permission can't be given to an org role")

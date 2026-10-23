@@ -16,6 +16,7 @@ from app import config, pg
 from app.security import crypto, passwords, mfa, tokens, audit
 from app.security.rbac import Principal, require, require_any, current_user, signed_in_user, client_ip
 from app.security.middleware import limiter
+from app.access.catalogue import TENANT_ADMIN
 from app.services import mailer
 from app.security import oidc
 
@@ -431,7 +432,7 @@ def provision_org(cur, legal_name, business_type, registration, data_region="ca-
     role_ids = {}
     cur.execute("SELECT name FROM role_templates WHERE scope='tenant' ORDER BY sort")
     for (name,) in cur.fetchall():
-        cur.execute("INSERT INTO roles (org_id, name, is_system) VALUES (%s,%s,true) RETURNING id", (org, name))
+        cur.execute("INSERT INTO roles (org_id, name, is_system, is_locked) VALUES (%s,%s,true,%s) RETURNING id", (org, name, name == TENANT_ADMIN))
         role_ids[name] = cur.fetchone()[0]
         cur.execute("""INSERT INTO role_permissions SELECT %s, perm FROM role_template_permissions WHERE template=%s""",
                     (role_ids[name], name))
@@ -452,7 +453,7 @@ def create_org(body: OrgIn, p: Principal = Depends(require("orgs.manage"))):
             raise HTTPException(422, "That data region isn't allowed on this platform")
         org, role_ids = provision_org(cur, body.legal_name, body.business_type, body.registration, body.data_region,
                                       body.plan, body.environment, body.brand_color, body.features)
-        link = _invite(cur, org, body.legal_name, body.admin_email, role_ids["Organization admin"], "Organization admin", None)
+        link = _invite(cur, org, body.legal_name, body.admin_email, role_ids[TENANT_ADMIN], TENANT_ADMIN, None)
         _audit(cur, p, "org_created", body.legal_name, {"plan": body.plan, "features": body.features,
                "admin": crypto.mask_email(body.admin_email)}, org_id=org)
     return {"org_id": str(org), "invited": crypto.mask_email(body.admin_email), **({"dev_link": link} if _dev() else {})}
@@ -708,7 +709,7 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
         if body.role_id:
             new_role = _role_in_org(cur, body.role_id, p.org_id)
             _no_escalation(cur, p, body.role_id)
-            if cur_role[0] == "Organization admin" and new_role != "Organization admin":
+            if cur_role[0] == TENANT_ADMIN and new_role != TENANT_ADMIN:
                 _keep_one_admin(cur, p.org_id)
             cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (body.role_id, uid))
             _audit(cur, p, "role_changed", str(uid), {"from": cur_role[0], "to": new_role})
@@ -716,7 +717,7 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
             cur.execute("SELECT status FROM users WHERE id=%s", (uid,))
             if body.status == "active" and cur.fetchone()[0] == "invited":
                 raise HTTPException(409, "This person hasn't finished setting up their account yet")
-            if body.status == "suspended" and cur_role[0] == "Organization admin":
+            if body.status == "suspended" and cur_role[0] == TENANT_ADMIN:
                 _keep_one_admin(cur, p.org_id)
             cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s RETURNING idp_subject", (body.status, uid))
             subj = cur.fetchone()[0]
@@ -729,7 +730,7 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
 
 def _keep_one_admin(cur, org_id):
     cur.execute("""SELECT count(*) FROM users u JOIN roles r ON r.id=u.role_id
-                   WHERE r.name='Organization admin' AND u.status='active'""")
+                   WHERE r.name=%s AND u.status='active'""", (TENANT_ADMIN,))
     if cur.fetchone()[0] <= 1:
         raise HTTPException(409, "Your organization needs at least one active admin")
 
@@ -766,15 +767,15 @@ def reset_mfa(uid: uuid.UUID, body: Reason, p: Principal = Depends(require("user
 @router.get("/admin/roles")
 def list_roles(p: Principal = Depends(require("roles.manage"))):
     with pg.tx(p.org_id) as cur:
-        cur.execute("""SELECT r.id, r.name, r.is_system, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}')
+        cur.execute("""SELECT r.id, r.name, r.is_system, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}'), r.is_locked
                        FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id GROUP BY r.id ORDER BY r.name""")
-        roles = [{"id": str(r[0]), "name": r[1], "system": r[2], "perms": sorted(r[3])} for r in cur.fetchall()]
+        roles = [{"id": str(r[0]), "name": r[1], "system": r[2], "perms": sorted(r[3]), "locked": r[4]} for r in cur.fetchall()]
     return {"roles": roles, "warnings": _sod_warnings(roles)}
 
 
 def _sod_warnings(roles):
     return [f"{r['name']} can both manage users and decide cases. One person could create an account and approve their own work."
-            for r in roles if "users.manage" in r["perms"] and ({"cases.decide", "str.approve"} & set(r["perms"]))]
+            for r in roles if not r.get("locked") and "users.manage" in r["perms"] and ({"cases.decide", "str.approve"} & set(r["perms"]))]
 
 
 class RoleIn(BaseModel):
@@ -815,8 +816,12 @@ def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
 def update_role(role_id: uuid.UUID, body: RoleIn, p: Principal = Depends(require("roles.manage"))):
     with pg.tx(p.org_id) as cur:
         name = _role_in_org(cur, role_id, p.org_id)
-        if name == "Organization admin" and "users.manage" not in body.perms:
-            raise HTTPException(409, "Organization admin must keep 'users.manage' so nobody is locked out")
+        cur.execute("SELECT 1 FROM users WHERE id=%s AND role_id=%s", (p.user_id, role_id))
+        if cur.fetchone():       # checked before "locked" so nobody learns more than "not your own role"
+            raise HTTPException(403, "You can't change the permissions of your own role. Ask another admin")
+        cur.execute("SELECT is_locked FROM roles WHERE id=%s", (role_id,))
+        if cur.fetchone()[0]:
+            raise HTTPException(409, f"The {name} role is locked: it always holds every permission and can't be edited")
         cur.execute("SELECT array_agg(perm) FROM role_permissions WHERE role_id=%s", (role_id,))
         before = cur.fetchone()[0] or []
         _write_perms(cur, p, role_id, body.perms)

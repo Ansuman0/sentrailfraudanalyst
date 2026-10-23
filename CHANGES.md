@@ -5,6 +5,8 @@ a developer machine. Backend: 160 checks, frontend: 23 tests, all passing. See [
 
 ## Changed
 
+- **Roles renamed (access model v2, in progress, not released)**: "Organization admin" becomes the locked "Tenant admin" with every tenant permission, "Platform admin" is merged into "Platform owner", and analysts can no longer override held screenings. See [docs/permissions.md](docs/permissions.md).
+
 - **Works before DNS is ready**: the app now also opens on the server's AWS public hostname (`https://ec2-…compute-1.amazonaws.com`, printed by the deploy log); the browser app talks to the API on the same address. Single sign-on still needs the real domain.
 
 - **Project layout**: the API now lives in `backend/` and the web app in `frontend/`, each with its own dependencies, Dockerfile and tests;

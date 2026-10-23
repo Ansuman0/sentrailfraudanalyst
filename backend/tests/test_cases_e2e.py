@@ -47,9 +47,9 @@ def add_user(org, role_id, email):
                      crypto.encrypt(email.split("@")[0], org, "name"), H, crypto.encrypt(secret, org, "totp")))
         return str(cur.fetchone()[0]), secret
 U = {}
-for name, org, roles, role in [("admin", nw, nw_roles, "Organization admin"), ("officer1", nw, nw_roles, "Compliance officer"),
+for name, org, roles, role in [("admin", nw, nw_roles, "Tenant admin"), ("officer1", nw, nw_roles, "Compliance officer"),
                                ("officer2", nw, nw_roles, "Compliance officer"), ("analyst", nw, nw_roles, "Compliance analyst"),
-                               ("auditor", nw, nw_roles, "Auditor (read-only)"), ("maple_admin", mr, mr_roles, "Organization admin"),
+                               ("auditor", nw, nw_roles, "Auditor (read-only)"), ("maple_admin", mr, mr_roles, "Tenant admin"),
                                ("sess1", nw, nw_roles, "Compliance analyst"), ("sess2", nw, nw_roles, "Compliance analyst"),
                                ("maple", mr, mr_roles, "Compliance officer")]:
     U[name] = (f"{name}@{'northwind' if org == nw else 'maple'}.ca", *add_user(org, roles[role], f"{name}@{'northwind' if org == nw else 'maple'}.ca"))
@@ -138,12 +138,14 @@ ok(r.status_code == 409, "a filed STR's alert can't be closed or reopened by a l
 
 # ---------------- override, assign, export ----------------
 held2 = screen(address=BTC, amount=0.1, asset="BTC", fiat_value=8000, travel_rule_ok=False, client_ref="ramp-tx-3").json()
-r = c.post(f"/screenings/{held2['screening_id']}/override", headers=AN, json={"action": "release", "reason": "travel rule data arrived"})
-r2 = c.post(f"/screenings/{held2['screening_id']}/override", headers=AN, json={"action": "block", "reason": "second thoughts"})
+ok(c.post(f"/screenings/{held2['screening_id']}/override", headers=AN, json={"action": "release", "reason": "analysts may not"}).status_code == 403,
+   "an analyst can't override a held transfer (screening.override left the analyst template in access model v2)")
+r = c.post(f"/screenings/{held2['screening_id']}/override", headers=O1, json={"action": "release", "reason": "travel rule data arrived"})
+r2 = c.post(f"/screenings/{held2['screening_id']}/override", headers=O1, json={"action": "block", "reason": "second thoughts"})
 released = screen(client_ref="ramp-tx-4").json()
-r3 = c.post(f"/screenings/{released['screening_id']}/override", headers=AN, json={"action": "block", "reason": "trying anyway"})
+r3 = c.post(f"/screenings/{released['screening_id']}/override", headers=O1, json={"action": "block", "reason": "trying anyway"})
 ok(r.status_code == 200 and r2.status_code == 409 and r3.status_code == 409,
-   "an analyst can release a held transfer once; released or blocked transfers can't be overridden (no endpoint existed)")
+   "an officer can release a held transfer once; released or blocked transfers can't be overridden")
 ok(c.get(f"/screenings/{held2['screening_id']}", headers=AU).json()["override"] == "release", "the override is recorded on the screening")
 r = c.post(f"/cases/A-{held2['screening_id']}/assign", headers=O1, json={"user_id": U["analyst"][1]})
 r2 = c.post(f"/cases/A-{held2['screening_id']}/assign", headers=O1, json={"user_id": U["auditor"][1]})
@@ -235,7 +237,7 @@ def add_password_user(org, role_id, email):
                      crypto.encrypt(email.split("@")[0], org, "name"), H))
         return str(cur.fetchone()[0])
 add_password_user(nw, nw_roles["Compliance officer"], "nomfa@northwind.ca")
-add_password_user(nw, nw_roles["Organization admin"], "nomfa.admin@northwind.ca")
+add_password_user(nw, nw_roles["Tenant admin"], "nomfa.admin@northwind.ca")
 cm = TestClient(app, base_url="https://testserver", raise_server_exceptions=False)
 r = cm.post("/auth/login", json={"email": "nomfa@northwind.ca", "password": PW})
 ok(r.status_code == 200 and r.json().get("mfa_enabled") is False and "access_token" in r.json(),

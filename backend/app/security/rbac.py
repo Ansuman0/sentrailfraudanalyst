@@ -10,8 +10,13 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
-from app import pg
+import logging
+
+from app import config, pg
+from app.access import cache, catalogue
 from app.security import tokens, crypto
+
+log = logging.getLogger("sentrail.access")
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -28,12 +33,17 @@ class Principal:
     session_id: str | None = None   # refresh-token family of this sign-in (access token "sid" claim)
     mfa: bool = True                # this sign-in used a second factor (TOTP, recovery code or the IdP's)
     mfa_setup: str | None = None    # "required" | "optional" while the user has no 2FA; None once it's on
+    alias_names: set = field(default_factory=set)   # old permission names this user holds only through a renamed permission
 
     @property
     def platform(self) -> bool:
         return self.org_id is None
 
     def can(self, perm: str) -> bool:
+        if perm in self.alias_names:
+            # An old permission name is still being asked for. Logged so the cut-over (phase 9) can see when none are left.
+            log.info("permission alias used", extra={"event": "permission_alias_used", "user_id": self.user_id, "org_id": self.org_id,
+                                                     "permission": perm})
         return perm in self.perms
 
 
@@ -71,16 +81,32 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         raise HTTPException(401, "Session expired. Sign in again", headers={"WWW-Authenticate": "Bearer"})
     ip = client_ip(request)
     with pg.tx(c["org"], platform=c["org"] is None) as cur:
-        cur.execute("""SELECT u.status, u.session_version, r.name,
-                              COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}'),
-                              u.mfa_enabled, u.auth_method = 'keycloak'
-                       FROM users u JOIN roles r ON r.id = u.role_id
-                       LEFT JOIN role_permissions rp ON rp.role_id = r.id
-                       WHERE u.id = %s GROUP BY u.status, u.session_version, r.name, u.mfa_enabled, u.auth_method""",
-                    (c["sub"],))
-        row = cur.fetchone()
-        if not row or row[0] != "active" or row[1] != c["sv"]:
+        cur.execute("""SELECT u.status, u.session_version, u.role_id, u.mfa_enabled, u.auth_method = 'keycloak'
+                       FROM users u WHERE u.id = %s""", (c["sub"],))
+        u = cur.fetchone()
+        if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
+        status, sv, role_id, mfa_enabled, idp = u
+        if config.ACCESS_MODEL_V2:
+            # New model: the role comes from the membership in the session's tenant (or the platform staff row).
+            if c["org"]:
+                cur.execute("SELECT role_id, status FROM tenant_memberships WHERE user_id=%s AND tenant_id=%s", (c["sub"], c["org"]))
+            else:
+                cur.execute("SELECT role_id, status FROM platform_staff WHERE user_id=%s", (c["sub"],))
+            m = cur.fetchone()
+            if not m or m[1] != "active":
+                raise HTTPException(401, "Your session has ended. Sign in again")
+            role_id = m[0]
+
+        def load_role():
+            cur.execute("""SELECT r.name, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}')
+                           FROM roles r LEFT JOIN role_permissions rp ON rp.role_id = r.id WHERE r.id = %s GROUP BY r.name""", (role_id,))
+            return cur.fetchone()
+        # Keyed by session_version and role: every change to what a user may do bumps session_version (access/cache.py).
+        role = cache.get_or_load((c["sub"], sv, str(role_id), bool(c["org"])), load_role)
+        if not role:
+            raise HTTPException(401, "Your session has ended. Sign in again")
+        row = (status, sv, role[0], role[1], mfa_enabled, idp)
         features, allow, org_requires = set(), [], False
         if c["org"]:
             cur.execute("SELECT feature FROM org_features WHERE org_id=%s AND in_plan AND enabled", (c["org"],))
@@ -92,13 +118,13 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         raise HTTPException(403, "Access isn't allowed from this network")
     if not c["org"] and row[2] != "Platform owner":
         org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
-    perms = set(row[3])
+    perms, alias_names = catalogue.expand_aliases(set(row[3]))
     mfa_used = "otp" in c.get("amr", [])
     if row[4] and not mfa_used:
         # Two-factor is on for this account, so a password-only session isn't enough (enabling it ends those sessions).
         raise HTTPException(401, "Two-factor verification required")
     return Principal(c["sub"], c["org"], row[2], perms, features, ip, session_id=c.get("sid"), mfa=mfa_used,
-                     mfa_setup=mfa_setup_state(org_requires, row[4], row[5]))
+                     mfa_setup=mfa_setup_state(org_requires, row[4], row[5]), alias_names=alias_names)
 
 
 def current_user(p: Principal = Depends(signed_in_user)) -> Principal:

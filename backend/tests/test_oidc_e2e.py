@@ -55,7 +55,7 @@ def add_user(email, role, status="active", sub=None):
         return cur.fetchone()[0]
 analyst_sub = str(uuid.uuid4())
 add_user("auditor@external-audit.ca", "Auditor (read-only)", sub=analyst_sub)
-add_user("leah.chen@northwindremit.ca", "Organization admin", status="invited")          # SSO user, not yet linked
+add_user("leah.chen@northwindremit.ca", "Tenant admin", status="invited")          # SSO user, not yet linked
 susp_sub = str(uuid.uuid4()); add_user("gone@external-audit.ca", "Compliance analyst", status="suspended", sub=susp_sub)
 
 def start(email=None, idp=None, return_to="/"):
@@ -89,7 +89,7 @@ with pg.tx(org) as cur:
 ok(st and st[0] == "active", "invited SSO user is linked to their identity on first sign-in and activated")
 tok = c.post("/auth/refresh").json()["access_token"]
 me = c.get("/me", headers={"Authorization": "Bearer " + tok}).json()
-ok(me["tenant"]["name"] == "Northwind Remit Inc." and me["role"] == "Organization admin", "the session knows its tenant and role")
+ok(me["tenant"]["name"] == "Northwind Remit Inc." and me["role"] == "Tenant admin", "the session knows its tenant and role")
 
 # replayed state
 code = uuid.uuid4().hex; NEXT[code] = id_token(leah_sub, "leah.chen@northwindremit.ca", p["nonce"][0])
@@ -125,7 +125,7 @@ ok(r.status_code == 401 and r.json() == r_unknown.json(),
 secret = mfa.new_secret()
 with pg.tx(platform=True) as cur:
     cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, password_hash, totp_secret_enc, mfa_enabled, status)
-                   VALUES (NULL,'00000000-0000-0000-0000-000000000001',%s,%s,%s,%s,true,'active')""",
+                   VALUES (NULL,'00000000-0000-0000-0000-000000000002',%s,%s,%s,%s,true,'active')""",
                 (crypto.encrypt("ops@sentrail.dev", None, "email"), crypto.blind_index("ops@sentrail.dev"),
                  passwords.hash_password("break glass passphrase here"), crypto.encrypt(secret, None, "totp")))
 r = c.post("/auth/login", json={"email": "ops@sentrail.dev", "password": "break glass passphrase here"})

@@ -47,15 +47,20 @@ ok(c.get("/me", headers=O).json()["tenant"]["name"] == "Platform console", "mast
 # --- roles seeded by login type ---
 pr = c.get("/platform/roles", headers=O).json()
 names = {r["name"]: r for r in pr["roles"]}
-ok(set(names) == {"Platform owner", "Platform admin", "Platform support", "Platform auditor"}
+ok(set(names) == {"Platform owner", "Platform support", "Platform auditor"}
    and all(p["key"] == "orgs.manage" or p["key"].startswith("platform.") for p in pr["permissions"]),
    "platform console has its own seeded roles and only platform permissions")
 with psycopg.connect(SUPER) as s:
     tmpl = dict(s.execute("SELECT scope, count(*) FROM role_templates GROUP BY scope").fetchall())
-ok(tmpl == {"platform": 4, "tenant": 4}, "role templates are seed data in the database: 4 platform, 4 tenant")
+ok(tmpl == {"platform": 3, "tenant": 4}, "role templates are seed data in the database: 3 platform, 4 tenant")
 
 # --- platform team ---
-r = c.post("/platform/invitations", headers=O, json={"email": "dev.k@sentrail.io", "role_id": names["Platform admin"]["id"]})
+# The former Platform admin role is merged into Platform owner; an operator-style custom role keeps the old admin checks meaningful.
+r = c.post("/platform/roles", headers=O, json={"name": "Platform operator", "perms": [
+    "platform.tenants.manage", "platform.support", "platform.users.manage", "platform.plans.manage", "platform.audit.view"]})
+ok(r.status_code == 200, "an owner can create a custom platform role")
+names["Platform operator"] = {"id": r.json()["id"]}
+r = c.post("/platform/invitations", headers=O, json={"email": "dev.k@sentrail.io", "role_id": names["Platform operator"]["id"]})
 dev_s = enroll(r.json()["dev_link"], "dev.k@sentrail.io", "Dev Kapoor", "amber valley piano sixty")
 r = c.post("/platform/invitations", headers=O, json={"email": "priya.n@sentrail.io", "role_id": names["Platform support"]["id"]})
 pri_s = enroll(r.json()["dev_link"], "priya.n@sentrail.io", "Priya Nair", "silver canyon kettle nine")
@@ -65,9 +70,9 @@ staff = c.get("/platform/users", headers=O).json()
 ok(len(staff) == 4 and all("•••@" in u["email"] for u in staff), "platform owner sees the platform team with emails masked")
 D = login("dev.k@sentrail.io", "amber valley piano sixty", dev_s, wait=True)
 r = c.post("/platform/invitations", headers=D, json={"email": "x@sentrail.io", "role_id": api.PLATFORM_OWNER_ROLE})
-ok(r.status_code == 403, "a platform admin can't create a platform owner")
+ok(r.status_code == 403, "a platform operator can't create a platform owner")
 owner_id = [u for u in staff if u["role"] == "Platform owner"][0]["id"]
-ok(c.patch(f"/platform/users/{owner_id}", headers=D, json={"status": "suspended"}).status_code == 403, "a platform admin can't suspend the owner")
+ok(c.patch(f"/platform/users/{owner_id}", headers=D, json={"status": "suspended"}).status_code == 403, "a platform operator can't suspend the owner")
 ok(c.patch(f"/platform/users/{owner_id}", headers=O, json={"status": "suspended"}).status_code == 403, "the owner can't suspend themselves")
 
 # --- platform roles can never touch customer data ---
@@ -106,7 +111,7 @@ ok(feats["export"]["in_plan"] and feats["export"]["enabled"] and feats["ai"]["en
 
 # --- security baseline ---
 P = login("priya.n@sentrail.io", "silver canyon kettle nine", pri_s, wait=False)
-ok(c.put("/platform/security", headers=D, json={"min_password_len_floor": 16}).status_code == 403, "a platform admin can't change the security baseline (owner only by default)")
+ok(c.put("/platform/security", headers=D, json={"min_password_len_floor": 16}).status_code == 403, "a platform operator can't change the security baseline (owner only by default)")
 r = c.put("/platform/security", headers=O, json={"min_password_len_floor": 16, "max_idle_timeout_min": 20})
 sec = c.get("/admin/security", headers=A).json()
 ok(r.status_code == 200 and sec["min_password_len"] == 16 and sec["idle_timeout_min"] <= 20, "raising the baseline raises every tenant that was below it")

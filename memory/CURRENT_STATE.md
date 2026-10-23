@@ -82,6 +82,9 @@ Written, never run (K-13): `infra/gcp`, `docker-compose.gcp.yml`, `scripts/deplo
 
 
 
+## Access model v2 work (2026-10-23)
+Phase 0 and Phase 1 done locally on branch `access-v2/phase-1` (uncommitted until asked). Main and the AWS host are unchanged: pushing migration 009 to main would run it on the live database at the next deploy, so it waits for the Phase 9 cut-over. Next: Phase 2 (sign-in and session) after approval.
+
 ## Demo data on the AWS server (2026-10-23)
 Seeded by the user's request with `seed --demo` run in the api container (ENV overridden for that one command; the server stays ENV=production). 2 demo orgs (Northwind Remit, Maple Ridge), 9 demo users (@sentrail.qatech.world), 3 alerts. AUTH_MODE=keycloak: demo users sign in via Keycloak (needs the domain, not the fallback URL) and set up TOTP on first sign-in. Password in git-ignored `.prod-credentials.txt`. To remove: delete both orgs by registration M23456789 / M24567810 + demo platform staff (roles ...0001/0003/0004), and delete the demo users in Keycloak; audit rows stay (append-only).
 

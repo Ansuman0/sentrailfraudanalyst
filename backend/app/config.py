@@ -8,6 +8,10 @@ load_dotenv()
 ENV = os.getenv("ENV") or "production"
 IS_DEV = ENV == "dev"
 
+# Access model v2 (memberships, one Platform owner, tenant switching ...). The new path runs behind this flag until the cut-over;
+# both paths must pass the full suite while it exists. Read at request time through config, so tests can switch it.
+ACCESS_MODEL_V2 = os.getenv("ACCESS_MODEL_V2", "false").lower() == "true"
+
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "")
 TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")

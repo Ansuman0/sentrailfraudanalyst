@@ -42,7 +42,16 @@ grep '^FAIL' "$OUT/sentrail_logging_unit.full" && status=1
 $PYTHON tests/test_llm_unit.py > "$OUT/sentrail_llm_unit.full" 2>&1 || status=1
 echo "== llm_unit"; echo "$(grep -c '^PASS' "$OUT/sentrail_llm_unit.full") passed"
 grep '^FAIL' "$OUT/sentrail_llm_unit.full" && status=1
-for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local"; do
+$PYTHON tests/test_catalogue_unit.py > "$OUT/sentrail_catalogue_unit.full" 2>&1 || status=1
+echo "== catalogue_unit"; echo "$(grep -c '^PASS' "$OUT/sentrail_catalogue_unit.full") passed"
+grep '^FAIL' "$OUT/sentrail_catalogue_unit.full" && status=1
+grep -q Traceback "$OUT/sentrail_catalogue_unit.full" && { tail -5 "$OUT/sentrail_catalogue_unit.full"; status=1; }
+# migration 009 up/down on seeded data (builds and drops its own database, next to TEST_DB)
+OWNER_PASSWORD="$OWNER_PASSWORD" $PYTHON tests/test_access_model_migration.py > "$OUT/sentrail_access_migration.full" 2>&1 || status=1
+echo "== access_migration"; echo "$(grep -c '^PASS' "$OUT/sentrail_access_migration.full") passed"
+grep '^FAIL' "$OUT/sentrail_access_migration.full" && status=1
+grep -q Traceback "$OUT/sentrail_access_migration.full" && { tail -5 "$OUT/sentrail_access_migration.full"; status=1; }
+for t in "security_e2e local" "oidc_e2e keycloak" "platform_e2e local" "cases_e2e local" "access_model_e2e local"; do
   set -- $t; fresh; echo "== $1"
   AUTH_MODE=$2 $PYTHON tests/test_$1.py > "$OUT/sentrail_$1.full" 2>&1 || status=1
   echo "$(grep -c '^PASS' "$OUT/sentrail_$1.full") passed"

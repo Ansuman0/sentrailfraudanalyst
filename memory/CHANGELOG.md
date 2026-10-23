@@ -2,6 +2,17 @@
 
 Engineering log of meaningful changes, newest first. User-facing release notes: [../CHANGES.md](../CHANGES.md).
 
+## 2026-10-23 — Access model v2, Phase 1 (data model, catalogue, migration) — branch `access-v2/phase-1`, NOT pushed to main
+
+Migration `009_access_model_v2.sql` (+ `migrations/down/009_access_model_v2.sql`, snapshots `av2_backup_*`): `tenant_memberships`, `platform_staff`, `tenant_access_sessions`, `platform_approvals`, `permission_aliases`; `roles.scope/is_locked`; `permissions.step_up`; organizations get `jurisdiction`, `owner_access`, `deleted_at`, status `deleted`, immutable slug; Platform admin merged into Platform owner; Organization admin -> locked Tenant admin with all 19 tenant permissions; `orgs.manage` renamed `platform.tenants.manage` with alias; users with `users.manage` also get `users.pii.reveal`, `security.manage`, `apikeys.manage`. Triggers keep memberships in step with `users` while the old model is live (only real role/status changes propagate: a login must not overwrite a membership; found by the new tests), and lock the Tenant admin role.
+New: `app/access/catalogue.py` (single source; `sync()` run by `scripts/migrate.py`; generates `docs/permissions.md`), `app/access/cache.py` (permission cache keyed by user, session_version, role), `config.ACCESS_MODEL_V2` (rbac reads the role from memberships/platform_staff when on), per-user identity encryption in `crypto.py` (+ `scripts/reencrypt_identity.py`, reads both forms), `migrate.py --to / --down`.
+Intended behaviour changes: analysts lose `screening.override`; Tenant admin gains all case permissions; old platform admins are owners; the roles screen no longer warns about the locked Tenant admin.
+Tests: 4 new suites (`catalogue_unit` 27, `access_migration` 48, `access_model_e2e` 33) + existing suites updated; all pass with the flag off and on; frontend 60. CI runs both settings.
+
+## 2026-10-23 — Access-control rebuild, Phase 0 (discovery only)
+
+Wrote `docs/access-control-current-state.md` (no code or migration changes): where users/roles/sessions/2FA/SSO/API keys/plans/audit live, how RLS is set, every route with its permission, the scope trigger, status of G1–G20 and I1–I13, 14 conflicts/risks and 7 open questions. Awaiting the user's approval and answers before Phase 1. Biggest findings: per-organization encryption of user identity blocks multi-tenant users (C1); Tenant admin has no case permissions today but the target gives all (C3); owner access reverses the RLS "platform never sees case data" guarantee (C4); no job runner exists (C9). Not committed.
+
 ## 2026-10-23 — Single email+password sign-in; two-factor for demo users
 
 User decision: no SSO button, one sign-in system, two-factor on for everyone except the owner (master) login. Sign-in page: removed "Continue with single sign-on". Backend: platform staff other than "Platform owner" now get `mfa_setup=required` (rbac.current_user); `seed --demo` sets `security_settings.mfa_required=true` for both demo orgs. Tests: backend 7 suites pass (platform_e2e +1 check), frontend 60. **Server still needs (blocked for the assistant, left to the user):** `AUTH_MODE=local` in the `sentrail/prod/env` secret + redeploy, then delete the old Keycloak-created demo users (orgs M23456789 / M24567810, platform staff roles …0001/0003/0004) and re-run `seed --demo` so they get local passwords. Until then demo users cannot sign in (Keycloak users are refused by the password form).

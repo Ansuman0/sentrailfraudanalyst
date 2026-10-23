@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import os
 import httpx
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
@@ -72,24 +73,62 @@ def ring():
     return _ring
 
 
+# Who a person is (email, name, phone, authenticator secret) belongs to the PERSON, not to one organization: with memberships a user can
+# belong to several tenants. These columns are bound to the user context. Case data ("str") stays bound to its organization.
+IDENTITY_COLUMNS = {"email", "name", "phone", "totp"}
+
+
 def _aad(org_id, column: str) -> bytes:
+    if column in IDENTITY_COLUMNS:
+        return f"user|{column}".encode()
+    return _legacy_aad(org_id, column)
+
+
+def _legacy_aad(org_id, column: str) -> bytes:
+    """How identity columns were bound before access model v2 (to the user's organization, or 'platform')."""
     return f"{org_id or 'platform'}|{column}".encode()
+
+
+def _seal(value: str, aad: bytes) -> str:
+    r = ring()
+    nonce = os.urandom(12)
+    ct = AESGCM(r.keys[r.current]).encrypt(nonce, value.encode(), aad)
+    return f"{r.current}:{_b64(nonce)}:{_b64(ct)}"
+
+
+def _open(token: str, aad: bytes) -> str:
+    ver, nonce, ct = token.split(":")
+    return AESGCM(ring().keys[ver]).decrypt(_unb64(nonce), _unb64(ct), aad).decode()
 
 
 def encrypt(value: str | None, org_id, column: str) -> str | None:
     if value is None:
         return None
-    r = ring()
-    nonce = os.urandom(12)
-    ct = AESGCM(r.keys[r.current]).encrypt(nonce, value.encode(), _aad(org_id, column))
-    return f"{r.current}:{_b64(nonce)}:{_b64(ct)}"
+    return _seal(value, _aad(org_id, column))
 
 
 def decrypt(token: str | None, org_id, column: str) -> str | None:
     if token is None:
         return None
-    ver, nonce, ct = token.split(":")
-    return AESGCM(ring().keys[ver]).decrypt(_unb64(nonce), _unb64(ct), _aad(org_id, column)).decode()
+    try:
+        return _open(token, _aad(org_id, column))
+    except InvalidTag:
+        if column not in IDENTITY_COLUMNS:
+            raise
+        return _open(token, _legacy_aad(org_id, column))      # written before access model v2; scripts.reencrypt_identity upgrades it
+
+
+def reencrypt_identity(token: str | None, org_id, column: str, down: bool = False) -> str | None:
+    """The token re-sealed under the per-user context (or, with down=True, the legacy organization context).
+    None when it is already in the target context (or empty)."""
+    if token is None:
+        return None
+    target, other = (_legacy_aad(org_id, column), _aad(org_id, column)) if down else (_aad(org_id, column), _legacy_aad(org_id, column))
+    try:
+        _open(token, target)
+        return None
+    except InvalidTag:
+        return _seal(_open(token, other), target)
 
 
 def needs_rotation(token: str) -> bool:

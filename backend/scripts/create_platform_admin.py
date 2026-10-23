@@ -15,7 +15,7 @@ if problems:
     sys.exit("; ".join(problems))
 with pg.tx(platform=True) as cur:
     cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, mfa_enabled, status)
-                   VALUES (NULL, '00000000-0000-0000-0000-000000000001', %s, %s, %s, %s, false, 'active')""",
+                   VALUES (NULL, '00000000-0000-0000-0000-000000000002', %s, %s, %s, %s, false, 'active')""",
                 (crypto.encrypt(crypto.normalize_email(email), None, "email"), crypto.blind_index(email),
                  crypto.encrypt(name, None, "name"), passwords.hash_password(pw)))
     audit.write(cur, None, None, "operator", "platform_admin_created", crypto.mask_email(email), {})
