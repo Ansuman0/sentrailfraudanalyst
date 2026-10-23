@@ -35,6 +35,9 @@ services:
       # so the login lockout, rate limits and audit IPs are per real client, not one shared bucket. The API is reachable only through Caddy.
       FORWARDED_ALLOW_IPS: "*"
 
+  worker:
+    restart: unless-stopped
+
 volumes:
   caddy-data:
   caddy-config:

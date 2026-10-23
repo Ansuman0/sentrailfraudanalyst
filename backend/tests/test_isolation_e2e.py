@@ -94,7 +94,7 @@ before = snapshot_b()
 # ---------------------------------------------------------------------------------------------------------------------
 # What the callers send
 # ---------------------------------------------------------------------------------------------------------------------
-VALUES = {"passkey_id": "00000000-0000-0000-0000-0000000000aa", "alert_id": B_ALERT, "sid": B_SCREEN, "uid": invited_b, "role_id": role_b, "prefix": B_PREFIX, "org_id": str(B),
+VALUES = {"passkey_id": "00000000-0000-0000-0000-0000000000aa", "rid": "00000000-0000-0000-0000-0000000000bb", "gid": "00000000-0000-0000-0000-0000000000cc", "token": "no-such-export-token", "alert_id": B_ALERT, "sid": B_SCREEN, "uid": invited_b, "role_id": role_b, "prefix": B_PREFIX, "org_id": str(B),
           "family_id": B_FAMILY, "user_id": user_b, "key": "professional", "approval_id": str(uuid.uuid4()), "address": "TZebraAddress000000000000000000001"}
 BODIES = {
     ("POST", "/cases/{alert_id}/decision"): {"decision": "false_positive", "reason": "isolation check"},

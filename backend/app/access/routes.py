@@ -3,6 +3,7 @@
 `route_table(app)` reads the FastAPI dependency tree of each route and classifies it:
   permission  - require(...) / require_any(...): the named permissions
   api_key     - machine access (POST /screen)
+  scim        - the identity provider's SCIM token (/scim/v2/*)
   session     - any signed-in person, no permission: only the self-service routes (profile, sessions, two-factor, tenant switching)
   public      - before sign-in or health checks: an explicit allowlist below
 A route that is none of these is a violation: `check_routes(app)` raises at start-up, and the unit test fails in CI.
@@ -39,6 +40,8 @@ def route_table(app) -> list[dict]:
             kind = "permission"
         elif any(c.sentrail_kind == "api_key" for c in calls):
             kind = "api_key"
+        elif any(c.sentrail_kind == "scim" for c in calls):
+            kind = "scim"
         elif any(c.sentrail_kind == "session" for c in calls):
             kind = "session"
         else:
@@ -77,6 +80,8 @@ def render_markdown(app) -> str:
             by = ("any of " if r["any"] and len(r["perms"]) > 1 else "") + ", ".join(f"`{p}`" for p in r["perms"])
         elif r["kind"] == "api_key":
             by = "API key (scope `screen`)"
+        elif r["kind"] == "scim":
+            by = "SCIM token (one tenant, Enterprise plan)"
         elif r["kind"] == "session":
             by = "signed in (own account only)"
         else:

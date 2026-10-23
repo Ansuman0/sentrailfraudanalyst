@@ -9,18 +9,33 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | DELETE | `/admin/access-requests/{sid}` | `security.manage` |
 | POST | `/admin/access-requests/{sid}/approve` | `security.manage` |
 | POST | `/admin/access-requests/{sid}/deny` | `security.manage` |
+| GET | `/admin/access-reviews` | `access.review` |
+| POST | `/admin/access-reviews` | `access.review` |
+| GET | `/admin/access-reviews/{rid}` | `access.review` |
+| PUT | `/admin/access-reviews/{rid}/members/{uid}` | `access.review` |
+| POST | `/admin/access-reviews/{rid}/sign-off` | `access.review` |
 | GET | `/admin/api-keys` | `apikeys.manage` |
 | POST | `/admin/api-keys` | `apikeys.manage` |
 | DELETE | `/admin/api-keys/{prefix}` | `apikeys.manage` |
 | POST | `/admin/api-keys/{prefix}/rotate` | `apikeys.manage` |
 | GET | `/admin/audit` | any of `audit.view`, `platform.audit.view` |
+| POST | `/admin/audit/export` | `audit.export` |
+| DELETE | `/admin/audit/stream` | `audit.export` |
+| GET | `/admin/audit/stream` | `audit.export` |
+| PUT | `/admin/audit/stream` | `audit.export` |
 | GET | `/admin/audit/verify` | any of `audit.view`, `platform.audit.view` |
+| POST | `/admin/data-export` | `data.export` |
 | GET | `/admin/features` | `features.manage` |
 | PUT | `/admin/features` | `features.manage` |
 | POST | `/admin/invitations` | `users.manage` |
 | GET | `/admin/roles` | `roles.manage` |
 | POST | `/admin/roles` | `roles.manage` |
 | PUT | `/admin/roles/{role_id}` | `roles.manage` |
+| GET | `/admin/scim/groups` | `security.manage` |
+| PUT | `/admin/scim/groups/{gid}` | `security.manage` |
+| GET | `/admin/scim/tokens` | `security.manage` |
+| POST | `/admin/scim/tokens` | `security.manage` |
+| DELETE | `/admin/scim/tokens/{prefix}` | `security.manage` |
 | GET | `/admin/security` | `security.manage` |
 | PUT | `/admin/security` | `security.manage` |
 | GET | `/admin/sso` | `security.manage` |
@@ -57,6 +72,7 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | POST | `/invitations/accept` | public (before sign-in) |
 | GET | `/me` | signed in (own account only) |
 | DELETE | `/me/access-session` | signed in (own account only) |
+| GET | `/me/exports/{token}` | signed in (own account only) |
 | POST | `/me/mfa/confirm` | signed in (own account only) |
 | POST | `/me/mfa/setup` | signed in (own account only) |
 | GET | `/me/passkeys` | signed in (own account only) |
@@ -69,6 +85,11 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | DELETE | `/me/sessions/{family_id}` | signed in (own account only) |
 | GET | `/me/tenants` | signed in (own account only) |
 | GET | `/platform/access` | any of `platform.audit.view`, `platform.tenant.access` |
+| GET | `/platform/access-reviews` | `platform.owners.manage` |
+| POST | `/platform/access-reviews` | `platform.owners.manage` |
+| GET | `/platform/access-reviews/{rid}` | `platform.owners.manage` |
+| PUT | `/platform/access-reviews/{rid}/members/{uid}` | `platform.owners.manage` |
+| POST | `/platform/access-reviews/{rid}/sign-off` | `platform.owners.manage` |
 | DELETE | `/platform/access/{sid}` | `platform.tenant.access` |
 | POST | `/platform/access/{sid}/extend` | `platform.tenant.access` |
 | GET | `/platform/approvals` | any of `platform.owners.manage`, `platform.security.manage`, `platform.tenants.delete`, `platform.tenants.manage` |
@@ -98,6 +119,20 @@ a unit test fails when this file is out of date, and the API refuses to start if
 | GET | `/policy` | `cases.view` |
 | PUT | `/policy` | `policy.edit` |
 | GET | `/readyz` | public (before sign-in) |
+| GET | `/scim/v2/Groups` | SCIM token (one tenant, Enterprise plan) |
+| POST | `/scim/v2/Groups` | SCIM token (one tenant, Enterprise plan) |
+| DELETE | `/scim/v2/Groups/{gid}` | SCIM token (one tenant, Enterprise plan) |
+| GET | `/scim/v2/Groups/{gid}` | SCIM token (one tenant, Enterprise plan) |
+| PATCH | `/scim/v2/Groups/{gid}` | SCIM token (one tenant, Enterprise plan) |
+| PUT | `/scim/v2/Groups/{gid}` | SCIM token (one tenant, Enterprise plan) |
+| GET | `/scim/v2/ResourceTypes` | SCIM token (one tenant, Enterprise plan) |
+| GET | `/scim/v2/ServiceProviderConfig` | SCIM token (one tenant, Enterprise plan) |
+| GET | `/scim/v2/Users` | SCIM token (one tenant, Enterprise plan) |
+| POST | `/scim/v2/Users` | SCIM token (one tenant, Enterprise plan) |
+| DELETE | `/scim/v2/Users/{uid}` | SCIM token (one tenant, Enterprise plan) |
+| GET | `/scim/v2/Users/{uid}` | SCIM token (one tenant, Enterprise plan) |
+| PATCH | `/scim/v2/Users/{uid}` | SCIM token (one tenant, Enterprise plan) |
+| PUT | `/scim/v2/Users/{uid}` | SCIM token (one tenant, Enterprise plan) |
 | POST | `/screen` | API key (scope `screen`) |
 | GET | `/screenings/{sid}` | `cases.view` |
 | POST | `/screenings/{sid}/override` | `screening.override` |

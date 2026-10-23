@@ -12,6 +12,10 @@ services:
     volumes:
       - api-data:/srv/data
 
+  worker:
+    image: qaansuman/sentrail-api:${API_TAG:-latest}
+    pull_policy: always
+
   web:
     image: qaansuman/sentrail-web:${WEB_TAG:-latest}
     pull_policy: always

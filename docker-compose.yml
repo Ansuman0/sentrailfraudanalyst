@@ -90,6 +90,19 @@ services:
       - ./backend/data:/srv/data                             # per-organization datasets, model, watchlist, Chroma index
     security_opt: ["no-new-privileges:true"]
 
+  worker:                                            # background jobs: dormant members, access reviews, audit streaming, tenant data removal
+    build: ./backend                                 # same image as the API, different command
+    command: ["python", "-m", "scripts.run_jobs", "--loop", "--every", "300"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://sentrail_app:${APP_DB_PASSWORD}@postgres:5432/sentrail
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+
   # ---- Observability (opt-in): docker compose --profile observability up -d   then http://localhost:3000 ----
   loki:
     profiles: [observability]

@@ -199,6 +199,12 @@ PROVEN_ELSEWHERE = {
     "users.break_glass": "test_owner_access_e2e.py",
     "api_keys.expires_at": "test_api_keys_e2e.py", "api_keys.ip_allowlist": "test_api_keys_e2e.py", "api_keys.rate_limit_per_min": "test_api_keys_e2e.py",
     "api_keys.last_used_at": "test_api_keys_e2e.py", "api_keys.revoked_at": "test_api_keys_e2e.py",
+    "security_settings.dormant_days": "test_governance_e2e.py",            # suspends memberships unused that long
+    "security_settings.access_review_days": "test_governance_e2e.py",      # when the next quarterly review opens
+    "security_settings.export_limit_per_hour": "test_governance_e2e.py",   # 429 past the limit
+    "security_settings.anomaly_searches_per_hour": "test_governance_e2e.py",
+    "security_settings.anomaly_exports_per_hour": "test_governance_e2e.py",
+    "security_settings.alert_new_country": "test_governance_e2e.py",
 }
 ok(True, f"{len(ENFORCED)} settings proven in this file, {len(PROVEN_ELSEWHERE)} in the suites named next to them")
 for key, suite in PROVEN_ELSEWHERE.items():

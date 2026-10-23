@@ -52,5 +52,8 @@ Status: accepted. Unreachable chain data or OFAC list → `hold`.
 ## Decision: Plain-script backend tests on a throwaway DB (`sentrail_test`)
 Status: accepted. No pytest migration planned; frontend uses Vitest.
 
+## Decision: Phase 7 governance defaults (access model v2)
+Status: accepted 2026-10-23 (approved with the brief's defaults). Separate `worker` container runs `python -m scripts.run_jobs --loop` (every 5 min, DB advisory lock). Dormant period 90 days (tenant range 30-365); review every 90 days, overdue after 30, reminded weekly; export link 15 min single use; exports 20 per person per hour, alert at 10; searches alert at 100 per hour; audit stream https-only with HMAC signature, off after 50 failures; SCIM covers users and groups, groups map to roles (never the locked Tenant admin role), deprovision = suspend and end sessions, never delete. Tenant data removal keeps the organization row as a tombstone and cuts the audit log only through `purge_tenant_audit` after retention.
+
 ## Decision: Phase 6 authentication defaults (access model v2)
 Status: accepted 2026-10-23. Passkeys use py_webauthn; SAML is supported only through the Keycloak broker (`sso_protocol`), so the API has no SAML code. Owner passkey-only (`platform_staff_passkey_only`) defaults off so no owner is locked out before registering; each tenant gets one emergency admin login (password + passkey) when SSO is enforced. An API key being rotated keeps working 24 hours. Every column of `security_settings` / `platform_settings` must map to an enforcement proof in `test_settings_enforcement_e2e.py`.

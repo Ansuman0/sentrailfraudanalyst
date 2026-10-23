@@ -12,6 +12,10 @@ services:
     volumes:
       - api-data:/srv/data                                 # named volume instead of ./backend/data (the repo is not on the server)
 
+  worker:
+    image: ${REGISTRY:?set by scripts/deploy-gcp.sh}/sentrail-api:${API_TAG:?set by scripts/deploy-gcp.sh}
+    pull_policy: always
+
   web:
     image: ${REGISTRY:?set by scripts/deploy-gcp.sh}/sentrail-web:${WEB_TAG:?set by scripts/deploy-gcp.sh}
     pull_policy: always

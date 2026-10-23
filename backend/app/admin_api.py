@@ -34,7 +34,7 @@ DEVICE_COOKIE = "sentrail_dv"
 
 PLATFORM_OWNER_ROLE = "00000000-0000-0000-0000-000000000002"
 # Roles and permissions are seed data in the database (migrations/005): role_templates, role_template_permissions.
-FEATURES = ["screening", "alerts", "ai", "trace", "statements", "export"]
+FEATURES = ["screening", "alerts", "ai", "trace", "statements", "export", "scim", "audit_streaming"]
 GENERIC_LOGIN_ERROR = "Email or password is incorrect"
 # keycloak: organization users sign in through Keycloak (OIDC). Local password sign-in stays available
 # only for platform admins as a break-glass account. local: everything uses the built-in sign-in.
@@ -231,6 +231,10 @@ def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="p
         last_mfa_at = _now() if mfa else None
     with pg.tx(org, platform=org is None) as limits_cur:        # the target tenant's own timeouts, whatever tenant `cur` is in
         idle, _ = _session_limits(limits_cur, org)
+
+    if org is not None:      # the person is using this tenant, so it is not dormant (in `cur`'s own transaction: a login has just touched this row)
+        cur.execute("""UPDATE tenant_memberships SET last_active_at=now() WHERE user_id=%s AND tenant_id=%s
+                       AND (last_active_at IS NULL OR last_active_at < now() - interval '1 hour')""", (uid, org))
     raw = tokens.new_opaque()
     family = family or uuid.uuid4()
     cur.execute("""INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at, user_agent, ip, auth_method,
@@ -312,6 +316,8 @@ def _device_notice(cur, request, response, uid, org, email_enc):
     cur.execute("INSERT INTO user_devices (user_id, device_hash, ip, user_agent) VALUES (%s,%s,%s,%s)",
                 (uid, crypto.sha256(raw), client_ip(request), request.headers.get("user-agent", "")[:200]))
     response.set_cookie(DEVICE_COOKIE, raw, httponly=True, secure=True, samesite="strict", path="/auth", max_age=2 * 365 * 86400)
+    from app import governance
+    governance.note_country(cur, request, uid, org, email_enc)
     if not known:
         return None
     return (crypto.decrypt(email_enc, org, "email"), "new_device", {"where": (request.headers.get("user-agent", "")[:60] or None)})
@@ -1052,6 +1058,8 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
                 _keep_one_admin(cur, p.org_id)
             cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s RETURNING idp_subject", (body.status, uid))
             subj = cur.fetchone()[0]
+            if body.status == "active":
+                cur.execute("UPDATE tenant_memberships SET reactivated_at=now() WHERE user_id=%s AND tenant_id=%s", (uid, p.org_id))
             cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
             if AUTH_MODE == "keycloak" and subj:
                 kc().set_enabled(subj, body.status == "active")   # also ends their Keycloak sessions
@@ -1200,6 +1208,12 @@ class SecurityIn(BaseModel):
     ip_allowlist: list[str] | None = None
     retention_years: int | None = Field(None, ge=5, le=15)
     owner_access: str | None = Field(None, pattern="^(allow|require_approval|deny)$")   # may a Sentrail platform owner enter this tenant?
+    dormant_days: int | None = Field(None, ge=30, le=365)                # memberships unused this long are suspended
+    access_review_days: int | None = Field(None, ge=30, le=365)           # how often a review is opened
+    export_limit_per_hour: int | None = Field(None, ge=1, le=1000)        # exports one person may make per hour
+    anomaly_searches_per_hour: int | None = Field(None, ge=5, le=10000)   # alert the admins past this many searches by one person
+    anomaly_exports_per_hour: int | None = Field(None, ge=1, le=1000)
+    alert_new_country: bool | None = None
 
     @field_validator("ip_allowlist")
     @classmethod
@@ -1209,15 +1223,15 @@ class SecurityIn(BaseModel):
         return v
 
 
-SECURITY_COLS = ["mfa_required", "idle_timeout_min",
-                 "min_password_len", "ip_allowlist", "retention_years"]
+SECURITY_COLS = ["mfa_required", "idle_timeout_min", "min_password_len", "ip_allowlist", "retention_years",
+                 "dormant_days", "access_review_days", "export_limit_per_hour", "anomaly_searches_per_hour", "anomaly_exports_per_hour",
+                 "alert_new_country"]
 
 
 @router.get("/admin/security")
 def get_security(p: Principal = Depends(require("security.manage"))):
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
-        cur.execute("""SELECT mfa_required, idle_timeout_min,
-                              min_password_len, ip_allowlist, retention_years FROM security_settings""")
+        cur.execute(f"SELECT {', '.join(SECURITY_COLS)} FROM security_settings")
         r = cur.fetchone()
     out = dict(zip(SECURITY_COLS, r)); out["ip_allowlist"] = [str(x) for x in out["ip_allowlist"]]
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
@@ -1255,9 +1269,12 @@ def set_security(body: SecurityIn, p: Principal = Depends(require("security.mana
             raise HTTPException(422, f"The platform requires passwords of at least {pw_floor} characters, "
                                      f"sign-out after at most {idle_max} minutes and {ret_floor}+ years of retention")
         cur.execute("""UPDATE security_settings SET mfa_required=%s,
-                       idle_timeout_min=%s, min_password_len=%s, ip_allowlist=%s::cidr[], retention_years=%s""",
-                    (new["mfa_required"], new["idle_timeout_min"],
-                     new["min_password_len"], new["ip_allowlist"], new["retention_years"]))
+                       idle_timeout_min=%s, min_password_len=%s, ip_allowlist=%s::cidr[], retention_years=%s,
+                       dormant_days=%s, access_review_days=%s, export_limit_per_hour=%s, anomaly_searches_per_hour=%s,
+                       anomaly_exports_per_hour=%s, alert_new_country=%s""",
+                    (new["mfa_required"], new["idle_timeout_min"], new["min_password_len"], new["ip_allowlist"], new["retention_years"],
+                     new["dormant_days"], new["access_review_days"], new["export_limit_per_hour"], new["anomaly_searches_per_hour"],
+                     new["anomaly_exports_per_hour"], new["alert_new_country"]))
         _audit(cur, p, "security_settings_changed", None,
                {"changed": {k: {"from": current[k], "to": new[k]} for k in changes if current.get(k) != new.get(k)}})
     return {"ok": True}

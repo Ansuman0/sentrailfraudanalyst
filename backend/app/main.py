@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
-from app import config, db
+from app import config, db, pg
 from app.connectors import risk_lists
 from app.services import cases, search as searchsvc, wallet_trace, screening
 from app.detection import rules, scorer
@@ -20,6 +20,9 @@ from app.security.middleware import SecurityHeaders, limiter, api_key_or_ip
 from app.security.rbac import install_handlers
 from app.owner_access import router as access_router
 from app.passkey_api import router as passkey_router
+from app.governance import router as governance_router
+from app.scim_api import router as scim_router, ScimError, scim_error_response
+from app import governance
 from app.logging_config import configure_logging
 
 app = FastAPI(title="Sentrail", version="0.3",
@@ -34,6 +37,9 @@ app.add_middleware(CORSMiddleware, allow_origins=[os.environ.get("APP_URL", "htt
 app.include_router(admin_router)
 app.include_router(access_router)
 app.include_router(passkey_router)
+app.include_router(governance_router)
+app.include_router(scim_router)
+app.add_exception_handler(ScimError, scim_error_response)
 install_handlers(app)
 configure_logging()
 
@@ -144,6 +150,7 @@ def revoke_access(alert_id: str, user_id: uuid.UUID, p: Principal = Depends(requ
 def search(q: str = Query(max_length=200), reason: str = Query(min_length=3), p: Principal = Depends(require("cases.view"))):
     kind = searchsvc.classify(q)
     db.audit(p, "search", kind.get("value") or "rejected", {"kind": kind["kind"], "reason": reason})
+    governance.anomaly_check(p, "search")
     if kind["kind"] == "rejected":
         raise HTTPException(400, kind["message"])
     if kind["kind"] == "wallet":
@@ -253,9 +260,13 @@ def export_case(alert_id: str, reason: str = Query(min_length=5, max_length=500)
                 p: Principal = Depends(require("data.export", feature="export"))):
     """Everything on one case, including the decrypted STR, for an examiner or law-enforcement request."""
     alert = _case_or_404(p, alert_id)
+    with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
+        governance.export_guard(cur, p)                    # hourly limit per person
+        marks = governance.watermark(cur, p, f"case {alert_id}")
     detail, _ = _case_detail(p, alert)
     db.audit(p, "case_exported", alert_id, {"reason": reason})
-    return {"alert": alert, **detail, "str": db.get_str(p, alert_id)}
+    governance.anomaly_check(p, "export")
+    return {"watermark": marks, "alert": alert, **detail, "str": db.get_str(p, alert_id)}
 
 
 REQUIRED_STATEMENT_COLUMNS = {"timestamp", "amount", "direction"}

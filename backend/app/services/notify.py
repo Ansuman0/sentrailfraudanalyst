@@ -39,6 +39,17 @@ MESSAGES = {
     "passkey_registered": ("A passkey was added to your Sentrail account",
                            "A passkey ({where}) was added to your Sentrail account as a second factor.\n\n"
                            "If this wasn't you, contact your administrator immediately."),
+    "dormant_suspended": ("People were suspended for inactivity in your Sentrail organization",
+                          "Memberships nobody used for your organization's dormant period were suspended{where}. An administrator can "
+                          "reactivate anyone under Users."),
+    "access_review_opened": ("An access review is waiting in Sentrail",
+                             "A new access review was opened for your organization{where}. Mark everyone keep, change or remove, then sign it off."),
+    "access_review_overdue": ("An access review in Sentrail is overdue",
+                             "An access review is past its due date{where}."),
+    "anomaly_alert": ("Unusual activity in your Sentrail organization",
+                      "Sentrail noticed something unusual{where}. Review the audit log. The thresholds are under Security."),
+    "audit_stream_failing": ("Your Sentrail audit stream is failing",
+                             "Delivering audit events to your endpoint keeps failing{where}."),
     "role_changed": ("Your Sentrail role was changed",
                      "Your role in Sentrail was changed{where}. Your access updates the next time you sign in.\n\n"
                      "If you didn't expect this, contact your administrator."),
