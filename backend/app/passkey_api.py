@@ -50,8 +50,9 @@ def register(request: Request, response: Response, body: RegisterIn, p: Principa
     session = None
     with pg.tx(home, platform=home is None, actor=p.user_id) as cur:
         _require_allowed(cur)
-        cur.execute("SELECT email_enc, role_id, session_version, mfa_enabled FROM users WHERE id=%s FOR UPDATE", (p.user_id,))
-        email_enc, role_id, sv, totp_on = cur.fetchone()
+        cur.execute("SELECT email_enc, session_version, mfa_enabled FROM users WHERE id=%s FOR UPDATE", (p.user_id,))
+        email_enc, sv, totp_on = cur.fetchone()
+        role_id = A._token_role(p.user_id, p.org_id)
         email = crypto.decrypt(email_enc, home, "email")
         first_factor = not totp_on and passkeys.count(cur, p.user_id) == 0
         try:
@@ -81,8 +82,7 @@ def mine(p: Principal = Depends(signed_in_user)):
 def remove(passkey_id: uuid.UUID, request: Request, p: Principal = Depends(signed_in_user)):
     home = _home(p)
     with pg.tx(home, platform=home is None, actor=p.user_id) as cur:
-        cur.execute("SELECT role_id FROM users WHERE id=%s", (p.user_id,))
-        is_owner = str(cur.fetchone()[0]) == A.PLATFORM_OWNER_ROLE
+        is_owner = str(A._token_role(p.user_id, None)) == A.PLATFORM_OWNER_ROLE      # (an owner is an owner on the platform team)
         cur.execute("SELECT platform_staff_passkey_only FROM platform_settings")
         required = cur.fetchone()[0]
         if is_owner and required and passkeys.count(cur, p.user_id) <= 1:
@@ -110,11 +110,12 @@ def sign_in_with_passkey(request: Request, response: Response, body: PasskeyLogi
     org = A._org_of(uid)
     notice = None
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("SELECT role_id, session_version, status, email_enc FROM users WHERE id=%s FOR UPDATE", (uid,))
+        cur.execute("SELECT NULL, session_version, status, email_enc FROM users WHERE id=%s FOR UPDATE", (uid,))
         row = cur.fetchone()
         if not row or row[2] != "active" or not A._passkeys_on(cur):
             raise HTTPException(401, "Sign-in expired. Start again")
-        role_id, sv, _, email_enc = row
+        _, sv, _, email_enc = row
+        role_id = A._token_role(uid, org)
         try:
             pid = passkeys.finish_authentication(cur, uid, body.credential, "login")
             ok = True

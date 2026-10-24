@@ -17,6 +17,7 @@ interface Form {
   anomaly_searches_per_hour: string;
   anomaly_exports_per_hour: string;
   alert_new_country: boolean;
+  owner_access: "allow" | "require_approval" | "deny";
 }
 
 const toForm = (s: SecuritySettings): Form => ({
@@ -31,6 +32,7 @@ const toForm = (s: SecuritySettings): Form => ({
   anomaly_searches_per_hour: String(s.anomaly_searches_per_hour),
   anomaly_exports_per_hour: String(s.anomaly_exports_per_hour),
   alert_new_country: s.alert_new_country,
+  owner_access: s.owner_access ?? "allow",
 });
 
 const parseNetworks = (text: string) => text.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
@@ -46,6 +48,7 @@ function diff(form: Form, s: SecuritySettings): SecurityPatch {
     if (Number(form[k]) !== s[k]) patch[k] = Number(form[k]);
   }
   if (form.alert_new_country !== s.alert_new_country) patch.alert_new_country = form.alert_new_country;
+  if (form.owner_access !== (s.owner_access ?? "allow")) patch.owner_access = form.owner_access;
   const nets = parseNetworks(form.ip_allowlist);
   if (nets.join() !== s.ip_allowlist.join()) patch.ip_allowlist = nets;
   return patch;
@@ -133,6 +136,16 @@ export function Security() {
           <label htmlFor="allow">Allowed networks</label>
           <textarea id="allow" rows={3} value={form.ip_allowlist} onChange={set("ip_allowlist")} placeholder="203.0.113.0/24" />
           <small>One network (CIDR) per line. Leave empty to allow any network. Sentrail won't save a list that would lock you out.</small>
+        </div>
+        <h2>Sentrail staff access</h2>
+        <div className="field">
+          <label htmlFor="owner-access">When a Sentrail platform owner asks to enter your organization</label>
+          <select id="owner-access" value={form.owner_access} onChange={(e) => setForm({ ...form, owner_access: e.target.value as Form["owner_access"] })}>
+            <option value="allow">Start the session at once (you are told)</option>
+            <option value="require_approval">Wait for one of your administrators to approve</option>
+            <option value="deny">Refuse (only a recorded legal hold overrides)</option>
+          </select>
+          <small>Sessions last 60 minutes and everything done in them is in your audit log. Requests are listed under Platform access requests.</small>
         </div>
         <h2>Governance</h2>
         <div className="fields2">

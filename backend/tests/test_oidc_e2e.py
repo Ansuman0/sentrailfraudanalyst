@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.security.rbac import install_handlers
 CSRF = {"X-Sentrail-CSRF": "1"}
 
+from app.access import members
 from app import pg
 from app.security import oidc, crypto, passwords, mfa
 from app.security.middleware import limiter
@@ -50,11 +51,9 @@ with pg.tx(platform=True) as cur:
     cur.execute("UPDATE organizations SET sso_domain='northwindremit.ca', sso_idp_alias='northwind-entra', sso_enforced=true WHERE id=%s", (org,))
 def add_user(email, role, status="active", sub=None):
     with pg.tx(org) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, status, idp_subject, auth_method)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,'keycloak') RETURNING id""",
-                    (org, roles[role], crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(email.split("@")[0], org, "name"), status, sub))
-        return cur.fetchone()[0]
+        return members.create_person(cur, org, roles[role], email_enc=crypto.encrypt(email, org, "email"), email_bidx=crypto.blind_index(email),
+                                     name_enc=crypto.encrypt(email.split("@")[0], org, "name"), status=status,
+                                     extra={"idp_subject": sub, "auth_method": "keycloak"})
 analyst_sub = str(uuid.uuid4())
 add_user("auditor@external-audit.ca", "Auditor (read-only)", sub=analyst_sub)
 add_user("leah.chen@northwindremit.ca", "Tenant admin", status="invited")          # SSO user, not yet linked
@@ -126,10 +125,10 @@ ok(r.status_code == 401 and r.json() == r_unknown.json(),
    "organization users can't use local password sign-in in Keycloak mode, and the answer is the same as for an unknown email")
 secret = mfa.new_secret()
 with pg.tx(platform=True) as cur:
-    cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, password_hash, totp_secret_enc, mfa_enabled, status)
-                   VALUES (NULL,'00000000-0000-0000-0000-000000000002',%s,%s,%s,%s,true,'active')""",
-                (crypto.encrypt("ops@sentrail.dev", None, "email"), crypto.blind_index("ops@sentrail.dev"),
-                 passwords.hash_password("break glass passphrase here"), crypto.encrypt(secret, None, "totp")))
+    members.create_person(cur, None, '00000000-0000-0000-0000-000000000002', email_enc=crypto.encrypt("ops@sentrail.dev", None, "email"),
+                          email_bidx=crypto.blind_index("ops@sentrail.dev"),
+                          extra={"password_hash": passwords.hash_password("break glass passphrase here"),
+                                 "totp_secret_enc": crypto.encrypt(secret, None, "totp"), "mfa_enabled": True})
 r = c.post("/auth/login", json={"email": "ops@sentrail.dev", "password": "break glass passphrase here"})
 ok(r.status_code == 200 and "mfa_token" in r.json(), "master break-glass login still works if Keycloak is down")
 

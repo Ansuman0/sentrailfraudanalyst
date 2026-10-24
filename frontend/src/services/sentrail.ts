@@ -131,6 +131,7 @@ export interface SecurityPatch {
   anomaly_searches_per_hour?: number;
   anomaly_exports_per_hour?: number;
   alert_new_country?: boolean;
+  owner_access?: "allow" | "require_approval" | "deny";
 }
 
 // ---- organization administration ----

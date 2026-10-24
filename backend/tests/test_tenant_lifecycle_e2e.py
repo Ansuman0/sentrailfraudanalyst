@@ -8,6 +8,7 @@ os.environ.setdefault("AUTH_MODE", "local")
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from app.access import members
 from app import config, pg
 from app.security.rbac import api_key
 from app.main import app
@@ -194,10 +195,10 @@ ok("tenant_admin_assigned" in [a for a, _ in chain(R)] and "tenant_admin_assigne
 ok(any(d.get("reason", "").startswith("ticket 99") for a, d in chain(R) if a == "tenant_admin_assigned"), "the tenant's own log carries the reason")
 r2 = c.post("/invitations/accept", json={"token": fragment(r.json()["dev_link"]), "full_name": "New Admin", "password": PW})
 ok(r2.status_code == 200, "they accept")
-ok(sql(SUPER, "SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.org_id=%s AND u.status='active' AND r.name='Tenant admin'", R) != [], "and the tenant has a working Tenant admin again")
+ok(sql(SUPER, "SELECT r.name FROM tenant_memberships m JOIN roles r ON r.id=m.role_id WHERE m.tenant_id=%s AND m.status='active' AND r.name='Tenant admin'", R) != [], "and the tenant has a working Tenant admin again")
 r = c.post(f"/platform/orgs/{R}/admin", headers=O1, json={"email": "officer@life.example.com", "reason": "ticket 100: second admin wanted"})
 ok(r.status_code == 200 and r.json()["how"] == "promoted", "an existing member can be promoted instead")
-ok(sql(SUPER, "SELECT r.name, u.mfa_mandatory FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", officer)[0] == ("Tenant admin", True),
+ok(sql(SUPER, "SELECT r.name, u.mfa_mandatory FROM users u JOIN tenant_memberships m ON m.user_id=u.id JOIN roles r ON r.id=m.role_id WHERE u.id=%s AND m.tenant_id=u.org_id", officer)[0] == ("Tenant admin", True),
    "the promoted person becomes Tenant admin with two-factor mandatory")
 r = c.post(f"/platform/orgs/{R}/admin", headers=O1, json={"email": "sixth@life.example.com", "reason": "wrong tenant on purpose"})
 ok(r.status_code == 200,

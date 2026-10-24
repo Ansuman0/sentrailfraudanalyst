@@ -3,6 +3,7 @@ import time
 import jwt
 import psycopg
 import pyotp
+from app.access import members
 from app import pg
 from app.security import crypto, passwords
 
@@ -16,12 +17,10 @@ code_at = lambda secret, offset=0: pyotp.TOTP(secret).at((int(time.time()) // 30
 def add_user(org, role_id, email, name=None, secret=None, status="active"):
     """A user with a password (and two-factor when `secret` is given). Returns the user id as a string."""
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, mfa_enabled, totp_secret_enc, status)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                    (org, role_id, crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(name or email.split("@")[0], org, "name"), passwords.hash_password(PW), secret is not None,
-                     crypto.encrypt(secret, org, "totp") if secret else None, status))
-        return str(cur.fetchone()[0])
+        return str(members.create_person(cur, org, role_id, email_enc=crypto.encrypt(email, org, "email"), email_bidx=crypto.blind_index(email),
+                                         name_enc=crypto.encrypt(name or email.split("@")[0], org, "name"), status=status,
+                                         extra={"password_hash": passwords.hash_password(PW), "mfa_enabled": secret is not None,
+                                                "totp_secret_enc": crypto.encrypt(secret, org, "totp") if secret else None}))
 
 
 def password_login(client, email):

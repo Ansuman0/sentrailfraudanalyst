@@ -6,6 +6,7 @@ import getpass
 import os
 import sys
 import app.config  # noqa: F401  (loads .env)
+from app.access import members
 from app import pg
 from app.access import catalogue as cat
 from app.security import audit, crypto, passwords
@@ -19,9 +20,8 @@ with pg.tx(platform=True) as cur:
     cur.execute("SELECT 1 FROM users WHERE break_glass")
     if cur.fetchone():
         sys.exit("A break-glass account already exists. Rotate its password instead of creating another")
-    cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, mfa_enabled, status, break_glass)
-                   VALUES (NULL, %s, %s, %s, %s, %s, false, 'active', true)""",
-                (cat.PLATFORM_OWNER_ROLE_ID, crypto.encrypt(crypto.normalize_email(email), None, "email"), crypto.blind_index(email),
-                 crypto.encrypt("Break-glass owner", None, "name"), passwords.hash_password(pw)))
+    members.create_person(cur, None, cat.PLATFORM_OWNER_ROLE_ID, email_enc=crypto.encrypt(crypto.normalize_email(email), None, "email"),
+                          email_bidx=crypto.blind_index(email), name_enc=crypto.encrypt("Break-glass owner", None, "name"),
+                          extra={"password_hash": passwords.hash_password(pw), "mfa_enabled": False, "break_glass": True})
     audit.write(cur, None, None, "operator", "break_glass_account_created", crypto.mask_email(email), {})
 print("Created. Seal the password. Using it alerts every owner and forces a password change.")

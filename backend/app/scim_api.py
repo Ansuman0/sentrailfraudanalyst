@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app import admin_api as A, governance, pg
+from app.access import members
 from app.security import audit, crypto, tokens
 from app.security.rbac import Principal, require, client_ip
 
@@ -235,12 +236,10 @@ def create_user(body: dict, ctx=Depends(scim_auth)):
                 A._require_seat(cur, ctx.org)
             except HTTPException as e:
                 raise ScimError(409, e.detail, "mutability")
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, status, auth_method, scim_external_id)
-                       VALUES (%s,%s,%s,%s,%s,%s,'keycloak',%s) RETURNING id""",
-                    (ctx.org, role, crypto.encrypt(crypto.normalize_email(email), ctx.org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(name, ctx.org, "name"), "active" if active else "suspended", body.get("externalId")))
-        uid = cur.fetchone()[0]
-        cur.execute("UPDATE tenant_memberships SET status=%s WHERE user_id=%s AND tenant_id=%s", ("active" if active else "suspended", uid, ctx.org))
+        uid = members.create_person(cur, ctx.org, role, email_enc=crypto.encrypt(crypto.normalize_email(email), ctx.org, "email"),
+                                    email_bidx=crypto.blind_index(email), name_enc=crypto.encrypt(name, ctx.org, "name"),
+                                    status="active" if active else "suspended",
+                                    extra={"auth_method": "keycloak", "scim_external_id": body.get("externalId")})
         audit.write(cur, ctx.org, None, "scim", "scim_user_created", crypto.mask_email(email), {"user_id": str(uid), "active": active}, ctx.ip)
         return _ok(_user_json(ctx.org, _get_user(cur, ctx.org, uid)), 201)
 

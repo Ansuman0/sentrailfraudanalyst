@@ -255,6 +255,9 @@ export interface SecuritySettings {
   anomaly_searches_per_hour: number;
   anomaly_exports_per_hour: number;
   alert_new_country: boolean;
+  /** May a Sentrail platform owner enter this organization? */
+  owner_access?: "allow" | "require_approval" | "deny";
+  legal_hold?: boolean;
   encryption: { algorithm: string; current_key: string; key_manager: string };
 }
 

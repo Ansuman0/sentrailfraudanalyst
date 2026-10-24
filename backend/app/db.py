@@ -88,8 +88,8 @@ def decide(p, alert_id, decision: str, reason: str) -> str:
 def assign(p, alert_id, user_id) -> None:
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         if user_id:
-            cur.execute("""SELECT 1 FROM users u JOIN role_permissions rp ON rp.role_id=u.role_id
-                           WHERE u.id=%s AND u.status='active' AND rp.perm='cases.decide'""", (user_id,))
+            cur.execute("""SELECT 1 FROM tenant_memberships m JOIN role_permissions rp ON rp.role_id=m.role_id
+                           WHERE m.user_id=%s AND m.tenant_id=%s AND m.status='active' AND rp.perm='cases.decide'""", (user_id, p.org_id))
             if not cur.fetchone():
                 raise Conflict("That person can't work cases")
         cur.execute("UPDATE alerts SET assigned_to=%s WHERE id=%s RETURNING 1", (user_id, alert_id))

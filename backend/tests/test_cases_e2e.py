@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.security.rbac import install_handlers
 CSRF = {"X-Sentrail-CSRF": "1"}
 
+from app.access import members
 from app import pg
 from app.main import app
 from app.admin_api import provision_org
@@ -43,11 +44,10 @@ H = passwords.hash_password(PW)
 def add_user(org, role_id, email):
     secret = mfa.new_secret()
     with pg.tx(org) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, totp_secret_enc, mfa_enabled, status)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,true,'active') RETURNING id""",
-                    (org, role_id, crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(email.split("@")[0], org, "name"), H, crypto.encrypt(secret, org, "totp")))
-        return str(cur.fetchone()[0]), secret
+        uid = members.create_person(cur, org, role_id, email_enc=crypto.encrypt(email, org, "email"), email_bidx=crypto.blind_index(email),
+                                    name_enc=crypto.encrypt(email.split("@")[0], org, "name"),
+                                    extra={"password_hash": H, "totp_secret_enc": crypto.encrypt(secret, org, "totp"), "mfa_enabled": True})
+        return str(uid), secret
 U = {}
 for name, org, roles, role in [("admin", nw, nw_roles, "Tenant admin"), ("officer1", nw, nw_roles, "Compliance officer"),
                                ("officer2", nw, nw_roles, "Compliance officer"), ("analyst", nw, nw_roles, "Compliance analyst"),
@@ -233,11 +233,8 @@ ok(out == ["False", "refused"], "with ENV unset the app runs as production and r
 # ---------------- two-factor: optional per organization, set up after sign-in ----------------
 def add_password_user(org, role_id, email):
     with pg.tx(org) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, status)
-                       VALUES (%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
-                    (org, role_id, crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(email.split("@")[0], org, "name"), H))
-        return str(cur.fetchone()[0])
+        return str(members.create_person(cur, org, role_id, email_enc=crypto.encrypt(email, org, "email"), email_bidx=crypto.blind_index(email),
+                                         name_enc=crypto.encrypt(email.split("@")[0], org, "name"), extra={"password_hash": H}))
 add_password_user(nw, nw_roles["Compliance officer"], "nomfa@northwind.ca")
 add_password_user(nw, nw_roles["Tenant admin"], "nomfa.admin@northwind.ca")
 cm = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)

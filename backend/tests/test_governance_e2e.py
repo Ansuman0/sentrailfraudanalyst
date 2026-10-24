@@ -13,6 +13,7 @@ os.environ.setdefault("AUTH_MODE", "local")
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
 import psycopg
 from fastapi.testclient import TestClient
+from app.access import members
 from app import governance, jobs as runner, pg
 from app.access import catalogue as cat, jobs as registry
 from app.admin_api import provision_org
@@ -443,7 +444,8 @@ with psycopg.connect(SUPER, autocommit=True) as conn:
 ok(leftovers == [("users", 1)], f"nothing carrying the tenant's id is left in any table (audit log included) except the person who also works elsewhere: {leftovers}")
 ok(sql(SUPER, "SELECT count(*) FROM users WHERE email_bidx=%s", crypto.blind_index("gone@delete.example.com"))[0][0] == 0, "people who only worked there are gone")
 ok(sql(SUPER, "SELECT count(*) FROM tenant_memberships WHERE user_id=%s AND tenant_id=%s AND status='active'", shared, T)[0][0] == 1, "a person who also works for another tenant keeps that membership")
-ok(sql(SUPER, "SELECT r.org_id FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", shared)[0][0] == T, "and no longer points at a removed role")
+ok(sql(SUPER, "SELECT count(*) FROM tenant_memberships m JOIN roles r ON r.id=m.role_id WHERE m.user_id=%s AND r.org_id=%s", shared, D)[0][0] == 0,
+   "and nothing of theirs points at a removed role")
 row = sql(SUPER, "SELECT legal_name, status, slug FROM organizations WHERE id=%s", D)[0]
 ok(row[0] == "[removed]" and row[1] == "deleted" and row[2], "the organization row stays as a tombstone (its slug is never reused)")
 rec = sql(SUPER, "SELECT detail FROM audit_events WHERE org_id IS NULL AND action='tenant_data_removed' AND target=%s", str(D))

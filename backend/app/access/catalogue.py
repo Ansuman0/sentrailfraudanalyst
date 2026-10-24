@@ -148,14 +148,16 @@ def sync(conn) -> dict:
                                 ON CONFLICT DO NOTHING RETURNING perm""", (PLATFORM_OWNER_ROLE_ID,)).fetchall()
         changed["owner_added"] = len(added)
         if added:
-            conn.execute("UPDATE users SET session_version = session_version + 1 WHERE role_id = %s", (PLATFORM_OWNER_ROLE_ID,))
+            conn.execute("""UPDATE users SET session_version = session_version + 1
+                            WHERE id IN (SELECT user_id FROM platform_staff WHERE role_id = %s)""", (PLATFORM_OWNER_ROLE_ID,))
         # Locked Tenant admin roles: every tenant permission.
         rows = conn.execute("""INSERT INTO role_permissions
                                SELECT r.id, p.key FROM roles r CROSS JOIN permissions p
                                WHERE r.is_locked AND r.scope='tenant' AND p.scope='tenant' ON CONFLICT DO NOTHING RETURNING role_id""").fetchall()
         changed["tenant_admin_added"] = len(rows)
         if rows:
-            conn.execute("UPDATE users SET session_version = session_version + 1 WHERE role_id = ANY(%s)", (list({r[0] for r in rows}),))
+            conn.execute("""UPDATE users SET session_version = session_version + 1
+                            WHERE id IN (SELECT user_id FROM tenant_memberships WHERE role_id = ANY(%s))""", (list({r[0] for r in rows}),))
     return changed
 
 

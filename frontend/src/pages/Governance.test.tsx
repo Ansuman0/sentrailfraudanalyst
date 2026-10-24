@@ -304,3 +304,20 @@ describe("exports", () => {
     expect(screen.queryByRole("button", { name: "Export signed JSON" })).not.toBeInTheDocument();
   });
 });
+
+describe("who may enter the organization", () => {
+  it("lets a Tenant admin choose how Sentrail platform owners get in, and sends only that change", async () => {
+    const calls = stubApi(meFor("Tenant admin"), {
+      "GET /admin/security": () => json(200, {
+        mfa_required: false, sso_enabled: false, idle_timeout_min: 15, min_password_len: 14, ip_allowlist: [], retention_years: 7,
+        dormant_days: 90, access_review_days: 90, export_limit_per_hour: 20, anomaly_searches_per_hour: 100, anomaly_exports_per_hour: 10,
+        alert_new_country: true, owner_access: "allow", legal_hold: false, encryption: { algorithm: "AES-256-GCM", current_key: "v1", key_manager: "local" },
+      }),
+      "PUT /admin/security": () => json(200, { ok: true }),
+    });
+    renderAt("/security");
+    fireEvent.change(await screen.findByLabelText(/Sentrail platform owner asks to enter/), { target: { value: "require_approval" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")!.body).toEqual({ owner_access: "require_approval" }));
+  });
+});

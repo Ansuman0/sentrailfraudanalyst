@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from app import admin_api as A, config, pg
 from app.access import jobs
+from app.access import members
 from app.access.catalogue import PLATFORM_OWNER_ROLE_ID, TENANT_ADMIN
 from app.security import audit, crypto, tokens
 from app.security.rbac import Principal, require, signed_in_user, client_ip
@@ -53,14 +54,15 @@ PLATFORM_REVIEW_DAYS = 90
 # ---------------------------------------------------------------------------------------------------------------------
 def _admin_addresses(org) -> list[str]:
     with pg.tx(org) as cur:
-        cur.execute("""SELECT u.email_enc FROM users u JOIN roles r ON r.id = u.role_id
-                       WHERE u.org_id=%s AND u.status='active' AND r.is_locked""", (org,))
+        cur.execute("""SELECT u.email_enc FROM tenant_memberships m JOIN users u ON u.id = m.user_id JOIN roles r ON r.id = m.role_id
+                       WHERE m.tenant_id=%s AND m.status='active' AND r.is_locked""", (org,))
         return [crypto.decrypt(r[0], org, "email") for r in cur.fetchall()]
 
 
 def _owner_addresses() -> list[str]:
     with pg.tx(platform=True) as cur:
-        cur.execute("SELECT email_enc FROM users WHERE org_id IS NULL AND role_id=%s AND status='active' AND NOT break_glass", (PLATFORM_OWNER_ROLE_ID,))
+        cur.execute("""SELECT u.email_enc FROM users u JOIN platform_staff s ON s.user_id=u.id
+                       WHERE s.role_id=%s AND s.status='active' AND NOT u.break_glass""", (PLATFORM_OWNER_ROLE_ID,))
         return [crypto.decrypt(r[0], None, "email") for r in cur.fetchall()]
 
 
@@ -75,19 +77,12 @@ def _tell(addresses, kind: str, where: str | None = None):
 def set_membership(cur, tenant, uid, *, status: str | None = None, role_id=None) -> bool:
     """Change a person's membership in `tenant` (and the old-model user row while this is their home tenant). Suspending also ends their
     sessions in that tenant at once (every request re-checks the session). Returns False when they have no membership there."""
-    cur.execute("SELECT 1 FROM tenant_memberships WHERE tenant_id=%s AND user_id=%s", (tenant, uid))
-    if not cur.fetchone():
+    if members.person_role(cur, uid, tenant) is None:
         return False
     if status:
-        cur.execute("UPDATE tenant_memberships SET status=%s, reactivated_at = CASE WHEN %s='active' THEN now() ELSE reactivated_at END "
-                    "WHERE tenant_id=%s AND user_id=%s", (status, status, tenant, uid))
-        cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s AND org_id=%s", (status, uid, tenant))
-        if status != "active":
-            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL AND (tenant_id=%s OR tenant_id IS NULL)",
-                        (uid, tenant))
+        members.set_status(cur, uid, tenant, status)
     if role_id:
-        cur.execute("UPDATE tenant_memberships SET role_id=%s WHERE tenant_id=%s AND user_id=%s", (role_id, tenant, uid))
-        cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s AND org_id=%s", (role_id, uid, tenant))
+        members.set_role(cur, uid, tenant, role_id)
     return True
 
 
@@ -329,10 +324,9 @@ def _sign_off(p, platform, rid):
                 continue
             if platform:
                 if decision == "remove":
-                    cur.execute("UPDATE users SET status='suspended', session_version=session_version+1 WHERE id=%s AND org_id IS NULL", (uid,))
-                    cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
+                    members.set_status(cur, uid, None, "suspended")
                 else:
-                    cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s AND org_id IS NULL", (new_role, uid))
+                    members.set_role(cur, uid, None, new_role)
                 continue
             if _is_last_admin(cur, uuid.UUID(str(p.org_id)), uid):
                 raise HTTPException(409, "Your organization needs at least one active admin. Change that decision first")
@@ -807,11 +801,6 @@ def _purge_one(org) -> None:
         n_users = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM alerts")
         n_cases = cur.fetchone()[0]
-    with pg.tx(platform=True) as cur:
-        # People who also belong to another tenant stay (they only lose this membership; their role no longer points at a removed one).
-        # Only platform scope sees the memberships of every tenant. (Their sync trigger re-creates the membership here: it goes below.)
-        cur.execute("""UPDATE users u SET role_id = (SELECT m.role_id FROM tenant_memberships m WHERE m.user_id=u.id AND m.tenant_id<>%s LIMIT 1)
-                       WHERE u.org_id=%s AND EXISTS (SELECT 1 FROM tenant_memberships m WHERE m.user_id=u.id AND m.tenant_id<>%s)""", (org, org, org))
     with pg.tx(org) as cur:
         cur.execute("SELECT set_config('app.role_sync', 'on', true)")
         # Everything that carries this tenant's id, discovered from the schema so a new table can't be forgotten. Parents wait for their

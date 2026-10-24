@@ -18,7 +18,7 @@ from app import config, pg
 from app.security import crypto, passwords, mfa, passkeys, tokens, audit
 from app.security.rbac import Principal, require, require_any, current_user, signed_in_user, client_ip
 from app.security.middleware import limiter
-from app.access import catalogue
+from app.access import cache, catalogue, members
 from app.access.catalogue import TENANT_ADMIN
 from app.services import mailer, notify
 from app.security import oidc
@@ -145,9 +145,10 @@ def login(request: Request, response: Response, body: Login):
     break_glass = False
     pk_options, methods = None, []
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, role_id, session_version, email_enc, break_glass, sso_emergency
+        cur.execute("""SELECT password_hash, status, failed_logins, mfa_enabled, session_version, email_enc, break_glass, sso_emergency
                        FROM users WHERE id=%s FOR UPDATE""", (uid,))
-        pw_hash, status, failed, mfa_enabled, role_id, sv, email_enc, break_glass, sso_emergency = cur.fetchone()
+        pw_hash, status, failed, mfa_enabled, sv, email_enc, break_glass, sso_emergency = cur.fetchone()
+        role_id = _token_role(uid, org)
         if not passwords.verify_password(pw_hash, body.password) or status != "active":
             failed += 1
             cur.execute("UPDATE users SET failed_logins=%s WHERE id=%s", (failed, uid))
@@ -219,6 +220,18 @@ def _session_limits(cur, org) -> tuple[int, int]:
         if r:
             idle = min(idle, r[0])
     return idle, max_hours
+
+
+def _token_role(uid, org):
+    """The person's role in this place (a tenant, or the platform team when org is None), for the session token. Looked up without a
+    tenant context (like the other sign-in lookups); the API reads the role again from the membership on every request."""
+    with pg.pool().connection() as conn, conn.cursor() as cur:
+        if org is None:
+            cur.execute("SELECT role_id FROM platform_staff_lookup(%s)", (uid,))
+        else:
+            cur.execute("SELECT role_id FROM membership_lookup(%s) WHERE tenant_id=%s", (uid, org))
+        r = cur.fetchone()
+    return r[0] if r else None
 
 
 def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="password+totp", mfa=True,
@@ -328,13 +341,14 @@ def verify_mfa(request: Request, response: Response, body: MfaIn):
     org = _org_of(uid)
     notice = None
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""SELECT totp_secret_enc, totp_last_step, role_id, session_version, mfa_enabled, status, email_enc
+        cur.execute("""SELECT totp_secret_enc, totp_last_step, NULL, session_version, mfa_enabled, status, email_enc
                        FROM users WHERE id=%s FOR UPDATE""", (uid,))
         row = cur.fetchone()
         if not row or not row[4] or not row[0] or row[5] != "active":
             # Account removed, suspended, or two-factor turned off since the password step: start over.
             raise HTTPException(401, "Sign-in expired. Start again")
-        enc, last, role_id, sv, _, _, email_enc = row
+        enc, last, _, sv, _, _, email_enc = row
+        role_id = _token_role(uid, org)
         if str(role_id) == PLATFORM_OWNER_ROLE and _passkeys_on(cur) and passkeys.count(cur, uid):
             raise HTTPException(403, "Platform owners sign in with a passkey")
         cur.execute("SELECT sso_emergency FROM users WHERE id=%s", (uid,))
@@ -396,8 +410,9 @@ def refresh(request: Request, response: Response, sentrail_rt: str | None = Cook
                 error = "timed_out"
             else:
                 with pg.pool().connection() as conn, conn.cursor() as c2:
-                    c2.execute("SELECT status, session_version, role_id FROM session_user_lookup(%s)", (uid,))
+                    c2.execute("SELECT status, session_version FROM session_user_lookup(%s)", (uid,))
                     u = c2.fetchone()
+                    u = (u[0], u[1], _token_role(uid, tenant)) if u else None
                 access_ok = bool(u and u[0] == "active")
                 if access_ok and asid:       # an owner inside a tenant: the access session must still be live
                     cur.execute("""SELECT 1 FROM tenant_access_sessions WHERE id=%s AND status='active' AND expires_at > now()""", (asid,))
@@ -485,15 +500,16 @@ def oidc_callback(request: Request, code: str | None = None, state: str | None =
         return _fail("no_account")
     response = RedirectResponse(f"{APP_URL}{return_to}", status_code=302)
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("SELECT status, role_id, session_version FROM users WHERE id=%s FOR UPDATE", (uid,))
-        status, role_id, sv = cur.fetchone()
-        if status == "suspended":
+        cur.execute("SELECT status, session_version FROM users WHERE id=%s FOR UPDATE", (uid,))
+        status, sv = cur.fetchone()
+        place = members.person_role(cur, uid, org)
+        role_id = place[0] if place else None
+        if status == "suspended" or place is None or place[1] == "suspended":
             audit.write(cur, org, uid, None, "login_blocked_suspended", None, {"via": "oidc"}, client_ip(request))
             blocked = True
         else:
             blocked = False
-            if status == "invited":
-                cur.execute("UPDATE users SET status='active' WHERE id=%s", (uid,))
+            members.activate(cur, uid, org)
             cur.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (uid,))
             audit.write(cur, org, uid, None, "auth.signin", None, {"via": "oidc", "amr": claims.get("amr")}, client_ip(request))
             _issue(cur, response, uid, org, role_id, sv, request, method="keycloak")
@@ -521,11 +537,9 @@ def _jit_provision(claims, email):
                 return None, None
             _require_seat(cur, org)
             name = claims.get("name") or " ".join(x for x in (claims.get("given_name"), claims.get("family_name")) if x) or email.split("@")[0]
-            cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, status, idp_subject, auth_method)
-                           VALUES (%s,%s,%s,%s,%s,'active',%s,'keycloak') RETURNING id""",
-                        (org, role_id, crypto.encrypt(crypto.normalize_email(email), org, "email"), crypto.blind_index(email),
-                         crypto.encrypt(name, org, "name"), claims["sub"]))
-            uid = cur.fetchone()[0]
+            uid = members.create_person(cur, org, role_id, email_enc=crypto.encrypt(crypto.normalize_email(email), org, "email"),
+                                        email_bidx=crypto.blind_index(email), name_enc=crypto.encrypt(name, org, "name"),
+                                        extra={"idp_subject": claims["sub"], "auth_method": "keycloak"})
             audit.write(cur, org, uid, None, "sso_jit_provisioned", crypto.mask_email(email), {"role_id": str(role_id)}, None)
     except HTTPException:
         return None, None            # no seat left (or similar): the sign-in ends as "no account"
@@ -716,10 +730,8 @@ def _invite(cur, org, org_name, email, role_id, role_name, invited_by) -> str:
     cur.execute("SELECT 1 FROM auth_lookup(%s)", (bidx,))
     if cur.fetchone():
         raise HTTPException(409, "This person already has an account or invitation")
-    cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, status)
-                   VALUES (%s,%s,%s,%s,'invited') RETURNING id""",
-                (org, role_id, crypto.encrypt(crypto.normalize_email(email), org, "email"), bidx))
-    uid = cur.fetchone()[0]
+    uid = members.create_person(cur, org, role_id, email_enc=crypto.encrypt(crypto.normalize_email(email), org, "email"), email_bidx=bidx,
+                                status="invited", invited_by=invited_by)
     if AUTH_MODE == "keycloak":
         sso_domain = None
         if org is not None:
@@ -823,8 +835,9 @@ def accept(request: Request, body: AcceptIn):
         else:
             cur.execute("SELECT min_password_len FROM security_settings WHERE org_id=%s", (org,))
         min_len = cur.fetchone()[0]
-        cur.execute("SELECT u.email_enc, r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s FOR UPDATE", (uid,))
-        email_enc, role_name = cur.fetchone()
+        cur.execute("SELECT email_enc FROM users WHERE id=%s FOR UPDATE", (uid,))
+        email_enc = cur.fetchone()[0]
+        role_name = members.role_name(cur, uid, org)
         email = crypto.decrypt(email_enc, org, "email")
         problems = passwords.check_policy(body.password, min_len, [body.full_name, *body.full_name.split(), email.split("@")[0]])
         if problems:
@@ -838,6 +851,7 @@ def accept(request: Request, body: AcceptIn):
             first_admin = role_name == TENANT_ADMIN
         cur.execute("""UPDATE users SET name_enc=%s, password_hash=%s, status='active', mfa_mandatory=%s WHERE id=%s""",
                     (crypto.encrypt(body.full_name, org, "name"), passwords.hash_password(body.password), first_admin, uid))
+        members.activate(cur, uid, org)
         cur.execute("UPDATE invitations SET accepted_at=now() WHERE id=%s", (inv_id,))
         audit.write(cur, org, uid, None, "user_enrolled", None, {"mfa": "required" if first_admin else "after_sign_in"}, client_ip(request))
         if first_admin:
@@ -861,8 +875,9 @@ def change_password(request: Request, response: Response, body: PasswordIn, p: P
     home = _org_of(p.user_id)
     notice = None
     with pg.tx(home, platform=home is None, actor=p.user_id) as cur:
-        cur.execute("""SELECT password_hash, role_id, session_version, email_enc, auth_method FROM users WHERE id=%s FOR UPDATE""", (p.user_id,))
-        pw_hash, role_id, sv, email_enc, method = cur.fetchone()
+        cur.execute("""SELECT password_hash, session_version, email_enc, auth_method FROM users WHERE id=%s FOR UPDATE""", (p.user_id,))
+        pw_hash, sv, email_enc, method = cur.fetchone()
+        role_id = _token_role(p.user_id, p.org_id)
         if method == "keycloak":
             raise HTTPException(409, "Your sign-in provider manages your password")
         if not passwords.verify_password(pw_hash, body.current_password):
@@ -910,7 +925,8 @@ def _break_glass_used(cur, uid, request):
 
 def _alert_owners(uid, request):
     with pg.tx(platform=True) as cur:
-        cur.execute("""SELECT email_enc FROM users WHERE org_id IS NULL AND role_id=%s AND status='active' AND id<>%s""", (PLATFORM_OWNER_ROLE, uid))
+        cur.execute("""SELECT u.email_enc FROM users u JOIN platform_staff s ON s.user_id=u.id
+                       WHERE s.role_id=%s AND s.status='active' AND u.id<>%s""", (PLATFORM_OWNER_ROLE, uid))
         addresses = [crypto.decrypt(r[0], None, "email") for r in cur.fetchall()]
     for address in addresses:
         notify.security_event(address, "break_glass_used", {"where": f"from {client_ip(request) or 'an unknown address'}"})
@@ -953,8 +969,9 @@ def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Princ
     two-factor session for this device. Returns single-use recovery codes, shown once."""
     with pg.tx(p.org_id, platform=p.platform, actor=p.actor, access_session=p.access_session_id) as cur:
         email_enc = _local_user(cur, p)
-        cur.execute("SELECT totp_secret_enc, totp_last_step, role_id, session_version FROM users WHERE id=%s", (p.user_id,))
-        enc, last, role_id, sv = cur.fetchone()
+        cur.execute("SELECT totp_secret_enc, totp_last_step, session_version FROM users WHERE id=%s", (p.user_id,))
+        enc, last, sv = cur.fetchone()
+        role_id = _token_role(p.user_id, p.org_id)
         if not enc:
             raise HTTPException(409, "Start the setup first")
         step = mfa.verify(crypto.decrypt(enc, p.org_id, "totp"), body.code, last)
@@ -981,8 +998,9 @@ def mfa_confirm(request: Request, response: Response, body: MfaConfirm, p: Princ
 @router.get("/admin/users")
 def list_users(p: Principal = Depends(require("users.manage"))):
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
-        cur.execute("""SELECT u.id, u.name_enc, u.email_enc, r.name, u.status, u.mfa_enabled, u.last_login_at, u.mfa_enabled_at
-                       FROM users u JOIN roles r ON r.id=u.role_id ORDER BY u.created_at""")
+        cur.execute("""SELECT u.id, u.name_enc, u.email_enc, r.name, m.status, u.mfa_enabled, u.last_login_at, u.mfa_enabled_at
+                       FROM users u JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=%s JOIN roles r ON r.id=m.role_id
+                       ORDER BY u.created_at""", (p.org_id,))
         rows = cur.fetchall()
         _audit(cur, p, "users_listed")
     return [{"id": str(r[0]), "name": crypto.decrypt(r[1], p.org_id, "name"),
@@ -1016,31 +1034,29 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
         raise HTTPException(403, "You can't change your own role or status. Ask another admin")
     role_notice = None
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
-        cur.execute("SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", (uid,))
-        cur_role = cur.fetchone()
-        if not cur_role:
+        cur_role = (members.role_name(cur, uid, p.org_id),)
+        if not cur_role[0]:
             raise HTTPException(404, "User not found")
         if body.role_id:
             new_role = _role_in_org(cur, body.role_id, p.org_id)
             _no_escalation(cur, p, body.role_id)
             if cur_role[0] == TENANT_ADMIN and new_role != TENANT_ADMIN:
                 _keep_one_admin(cur, p.org_id)
-            cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s RETURNING email_enc", (body.role_id, uid))
-            role_notice = (crypto.decrypt(cur.fetchone()[0], p.org_id, "email"), "role_changed", {"where": new_role})
+            members.set_role(cur, uid, p.org_id, body.role_id)
+            cur.execute("SELECT email_enc FROM users WHERE id=%s", (uid,))
+            e = cur.fetchone()
+            role_notice = (crypto.decrypt(e[0], p.org_id, "email"), "role_changed", {"where": new_role}) if e else None
             _audit(cur, p, "role_changed", str(uid), {"from": cur_role[0], "to": new_role})
         if body.status:
-            cur.execute("SELECT status FROM users WHERE id=%s", (uid,))
-            if body.status == "active" and cur.fetchone()[0] == "invited":
+            if body.status == "active" and members.person_role(cur, uid, p.org_id)[1] == "invited":
                 raise HTTPException(409, "This person hasn't finished setting up their account yet")
             if body.status == "suspended" and cur_role[0] == TENANT_ADMIN:
                 _keep_one_admin(cur, p.org_id)
-            cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s RETURNING idp_subject", (body.status, uid))
-            subj = cur.fetchone()[0]
-            if body.status == "active":
-                cur.execute("UPDATE tenant_memberships SET reactivated_at=now() WHERE user_id=%s AND tenant_id=%s", (uid, p.org_id))
-            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
-            if AUTH_MODE == "keycloak" and subj:
-                kc().set_enabled(subj, body.status == "active")   # also ends their Keycloak sessions
+            members.set_status(cur, uid, p.org_id, body.status)       # also ends their sessions in this tenant (all of them if none is left)
+            cur.execute("SELECT status, idp_subject FROM users WHERE id=%s", (uid,))
+            account = cur.fetchone()       # (only visible for people whose home is this tenant)
+            if AUTH_MODE == "keycloak" and account and account[1]:
+                kc().set_enabled(account[1], account[0] == "active")   # the account itself: also ends their Keycloak sessions
             _audit(cur, p, f"user_{body.status}", str(uid), {"sessions_ended": True})
     if role_notice:
         notify.security_event(*role_notice)
@@ -1048,8 +1064,8 @@ def update_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends(require(
 
 
 def _keep_one_admin(cur, org_id):
-    cur.execute("""SELECT count(*) FROM users u JOIN roles r ON r.id=u.role_id
-                   WHERE r.name=%s AND u.status='active'""", (TENANT_ADMIN,))
+    cur.execute("""SELECT count(*) FROM tenant_memberships m JOIN roles r ON r.id=m.role_id
+                   WHERE m.tenant_id=%s AND r.is_locked AND m.status='active'""", (org_id,))
     if cur.fetchone()[0] <= 1:
         raise HTTPException(409, "Your organization needs at least one active admin")
 
@@ -1141,8 +1157,7 @@ class RoleIn(BaseModel):
 
 def _write_perms(cur, p, role_id, perms):
     # No self-escalation: nobody can change the permissions of the role they hold.
-    cur.execute("SELECT 1 FROM users WHERE id=%s AND role_id=%s", (p.user_id, role_id))
-    if cur.fetchone():
+    if members.holds_role(cur, p.user_id, role_id):
         raise HTTPException(403, "You can't change the permissions of your own role. Ask another admin")
     cur.execute("DELETE FROM role_permissions WHERE role_id=%s", (role_id,))
     for perm in perms:
@@ -1183,8 +1198,7 @@ def create_role(body: RoleIn, p: Principal = Depends(require("roles.manage"))):
 def update_role(role_id: uuid.UUID, body: RoleIn, p: Principal = Depends(require("roles.manage"))):
     with pg.tx(p.org_id, actor=p.actor, access_session=p.access_session_id) as cur:
         name = _role_in_org(cur, role_id, p.org_id)
-        cur.execute("SELECT 1 FROM users WHERE id=%s AND role_id=%s", (p.user_id, role_id))
-        if cur.fetchone():       # checked before "locked" so nobody learns more than "not your own role"
+        if members.holds_role(cur, p.user_id, role_id):       # checked before "locked" so nobody learns more than "not your own role"
             raise HTTPException(403, "You can't change the permissions of your own role. Ask another admin")
         cur.execute("SELECT is_locked FROM roles WHERE id=%s", (role_id,))
         if cur.fetchone()[0]:
@@ -1192,7 +1206,8 @@ def update_role(role_id: uuid.UUID, body: RoleIn, p: Principal = Depends(require
         cur.execute("SELECT array_agg(perm) FROM role_permissions WHERE role_id=%s", (role_id,))
         before = cur.fetchone()[0] or []
         _write_perms(cur, p, role_id, body.perms)
-        cur.execute("UPDATE users SET session_version=session_version+1 WHERE role_id=%s", (role_id,))  # apply now
+        members.bump_role_holders(cur, role_id, p.org_id)    # apply now
+        cache.clear()
         _audit(cur, p, "role_permissions_changed", name, {"added": sorted(set(body.perms) - set(before)),
                                                           "removed": sorted(set(before) - set(body.perms))})
     return {"ok": True, "warnings": _sod_warnings([{"name": name, "perms": body.perms}])}
@@ -1532,13 +1547,14 @@ def step_up(request: Request, body: StepUpIn, p: Principal = Depends(signed_in_u
         raise HTTPException(403, "Choose a tenant first")
     home = _org_of(p.user_id)
     with pg.tx(home, platform=home is None) as cur:
-        cur.execute("""SELECT totp_secret_enc, totp_last_step, role_id, session_version, mfa_enabled, status
+        cur.execute("""SELECT totp_secret_enc, totp_last_step, NULL, session_version, mfa_enabled, status
                        FROM users WHERE id=%s FOR UPDATE""", (p.user_id,))
         row = cur.fetchone()
         n_pk = passkeys.count(cur, p.user_id) if row and _passkeys_on(cur) else 0
         if not row or row[5] != "active" or not ((row[4] and row[0]) or n_pk):
             raise HTTPException(409, "Turn on two-factor authentication first")
-        enc, last, role_id, sv = row[:4]
+        enc, last, _, sv = row[:4]
+        role_id = _token_role(p.user_id, p.org_id)
         used_passkey = False
         if body.credential is not None:
             try:
@@ -1546,7 +1562,7 @@ def step_up(request: Request, body: StepUpIn, p: Principal = Depends(signed_in_u
                 ok, used_passkey = True, True
             except ValueError:
                 ok = False
-        elif str(role_id) == PLATFORM_OWNER_ROLE and n_pk:
+        elif str(_token_role(p.user_id, None)) == PLATFORM_OWNER_ROLE and n_pk:
             raise HTTPException(403, "Platform owners confirm with a passkey")
         elif not enc:
             raise HTTPException(409, "Confirm with a passkey: no authenticator app is set up")
@@ -1674,8 +1690,9 @@ def set_sso_emergency(body: EmergencyIn, p: Principal = Depends(require("securit
     if p.access_session_id:
         raise HTTPException(403, "A platform owner working inside this organization can't change its sign-in rules")
     with pg.tx(p.org_id, actor=p.actor) as cur:
-        cur.execute("""SELECT u.status, r.is_locked, (SELECT count(*) FROM user_passkeys k WHERE k.user_id=u.id)
-                       FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s AND u.org_id=%s""", (body.user_id, p.org_id))
+        cur.execute("""SELECT m.status, r.is_locked, (SELECT count(*) FROM user_passkeys k WHERE k.user_id=u.id)
+                       FROM users u JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=%s JOIN roles r ON r.id=m.role_id
+                       WHERE u.id=%s AND u.org_id=%s""", (p.org_id, body.user_id, p.org_id))
         r = cur.fetchone()
         if not r:
             raise HTTPException(404, "User not found")
@@ -1741,8 +1758,8 @@ def _platform_role(cur, role_id) -> str:
 @router.get("/platform/users")
 def platform_users(p: Principal = Depends(require("platform.users.manage"))):
     with pg.tx(platform=True) as cur:
-        cur.execute("""SELECT u.id, u.name_enc, u.email_enc, r.name, u.status, u.auth_method, u.last_login_at
-                       FROM users u JOIN roles r ON r.id=u.role_id WHERE u.org_id IS NULL ORDER BY r.name""")
+        cur.execute("""SELECT u.id, u.name_enc, u.email_enc, r.name, s.status, u.auth_method, u.last_login_at
+                       FROM users u JOIN platform_staff s ON s.user_id=u.id JOIN roles r ON r.id=s.role_id ORDER BY r.name""")
         rows = cur.fetchall()
     return [{"id": str(r[0]), "name": crypto.decrypt(r[1], None, "name"),
              "email": crypto.mask_email(crypto.decrypt(r[2], None, "email")), "role": r[3], "status": r[4],
@@ -1770,7 +1787,7 @@ def update_platform_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends
     if str(uid) == p.user_id:
         raise HTTPException(403, "You can't change your own role or status. Ask another platform admin")
     with pg.tx(platform=True) as cur:
-        cur.execute("SELECT r.name, u.role_id FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s AND u.org_id IS NULL", (uid,))
+        cur.execute("SELECT r.name, s.role_id FROM platform_staff s JOIN roles r ON r.id=s.role_id WHERE s.user_id=%s", (uid,))
         cur_role = cur.fetchone()
         if not cur_role:
             raise HTTPException(404, "Platform user not found")
@@ -1778,7 +1795,7 @@ def update_platform_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends
         if touching_owner and not p.can("platform.owners.manage"):
             raise HTTPException(403, "Only a platform owner can change a platform owner")
         if cur_role[0] == "Platform owner" and (body.status == "suspended" or (body.role_id and str(body.role_id) != PLATFORM_OWNER_ROLE)):
-            cur.execute("""SELECT count(*) FROM users WHERE org_id IS NULL AND status='active' AND role_id=%s""", (PLATFORM_OWNER_ROLE,))
+            cur.execute("""SELECT count(*) FROM platform_staff WHERE status='active' AND role_id=%s""", (PLATFORM_OWNER_ROLE,))
             if cur.fetchone()[0] <= 1:
                 raise HTTPException(409, "The platform needs at least one active owner")
         if touching_owner:
@@ -1787,14 +1804,14 @@ def update_platform_user(uid: uuid.UUID, body: UserPatch, p: Principal = Depends
                                                               "status": body.status}, "Change a platform owner")
         if body.role_id:
             new_role = _platform_role(cur, body.role_id)
-            cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (body.role_id, uid))
+            members.set_role(cur, uid, None, body.role_id)
             _audit(cur, p, "platform_role_changed", str(uid), {"from": cur_role[0], "to": new_role})
         if body.status:
-            cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s RETURNING idp_subject", (body.status, uid))
-            subj = cur.fetchone()[0]
-            cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
-            if AUTH_MODE == "keycloak" and subj:
-                kc().set_enabled(subj, body.status == "active")
+            members.set_status(cur, uid, None, body.status)
+            cur.execute("SELECT status, idp_subject FROM users WHERE id=%s", (uid,))
+            account = cur.fetchone()
+            if AUTH_MODE == "keycloak" and account and account[1]:
+                kc().set_enabled(account[1], account[0] == "active")
             _audit(cur, p, f"platform_user_{body.status}", str(uid))
     return {"ok": True}
 
@@ -1819,8 +1836,7 @@ class PlatformRoleIn(BaseModel):
 def _write_platform_perms(cur, p, role_id, name, perms):
     if name == "Platform owner":
         raise HTTPException(409, "The platform owner role always has every platform permission")
-    cur.execute("SELECT 1 FROM users WHERE id=%s AND role_id=%s", (p.user_id, role_id))
-    if cur.fetchone():
+    if members.holds_role(cur, p.user_id, role_id):
         raise HTTPException(403, "You can't change the permissions of your own role")
     cur.execute("SELECT key FROM permissions WHERE scope='platform'")
     allowed = {r[0] for r in cur.fetchall()}
@@ -1829,7 +1845,8 @@ def _write_platform_perms(cur, p, role_id, name, perms):
     cur.execute("DELETE FROM role_permissions WHERE role_id=%s", (role_id,))
     for perm in perms:
         cur.execute("INSERT INTO role_permissions VALUES (%s,%s)", (role_id, perm))
-    cur.execute("UPDATE users SET session_version=session_version+1 WHERE role_id=%s", (role_id,))
+    members.bump_role_holders(cur, role_id, None)
+    cache.clear()
 
 
 @router.put("/platform/roles/{role_id}")
@@ -1940,8 +1957,9 @@ def support_list_users(org_id: uuid.UUID, reason: str, p: Principal = Depends(re
     if len(reason) < 5:
         raise HTTPException(422, "Give a reason, such as a support ticket number")
     with pg.tx(org_id, platform=True) as cur:
-        cur.execute("""SELECT u.id, u.email_enc, r.name, u.status, u.mfa_enabled OR u.idp_subject IS NOT NULL,
-                              u.last_login_at FROM users u JOIN roles r ON r.id=u.role_id WHERE u.org_id=%s""", (org_id,))
+        cur.execute("""SELECT u.id, u.email_enc, r.name, m.status, u.mfa_enabled OR u.idp_subject IS NOT NULL,
+                              u.last_login_at FROM users u JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=%s
+                              JOIN roles r ON r.id=m.role_id WHERE u.org_id=%s""", (org_id, org_id))
         rows = cur.fetchall()
         # access transparency: the support access is written to the tenant's own audit log too
         _audit(cur, p, "support_viewed_users", None, {"reason": reason}, org_id=org_id)
@@ -2063,21 +2081,20 @@ def _exec_owner_add(cur, p, payload, reason, approval_id):
 
 def _exec_owner_change(cur, p, payload, reason, approval_id):
     uid, new_role, new_status = payload["uid"], payload.get("role_id"), payload.get("status")
-    cur.execute("SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s AND u.org_id IS NULL", (uid,))
+    cur.execute("SELECT r.name FROM platform_staff s JOIN roles r ON r.id=s.role_id WHERE s.user_id=%s", (uid,))
     cur_role = cur.fetchone()
     if not cur_role:
         raise HTTPException(404, "Platform user not found")
     leaving = cur_role[0] == "Platform owner" and (new_status == "suspended" or (new_role and str(new_role) != PLATFORM_OWNER_ROLE))
     if leaving:
-        cur.execute("SELECT count(*) FROM users WHERE org_id IS NULL AND status='active' AND role_id=%s", (PLATFORM_OWNER_ROLE,))
+        cur.execute("SELECT count(*) FROM platform_staff WHERE status='active' AND role_id=%s", (PLATFORM_OWNER_ROLE,))
         if cur.fetchone()[0] <= 1:
             raise HTTPException(409, "The platform needs at least one active owner")
     if new_role:
         _platform_role(cur, new_role)
-        cur.execute("UPDATE users SET role_id=%s, session_version=session_version+1 WHERE id=%s", (new_role, uid))
+        members.set_role(cur, uid, None, new_role)
     if new_status:
-        cur.execute("UPDATE users SET status=%s, session_version=session_version+1 WHERE id=%s", (new_status, uid))
-        cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (uid,))
+        members.set_status(cur, uid, None, new_status)
     _audit(cur, p, "platform_owner_changed", uid, {"role_id": new_role, "status": new_status, "approval": str(approval_id)})
     return {"executed": "owner.change"}, None
 
@@ -2181,10 +2198,12 @@ def assign_tenant_admin(org_id: uuid.UUID, body: AdminRecoveryIn, p: Principal =
         known = cur.fetchone()
         link, how = None, "invited (72 hours)"
         if known and known[1] == org_id:
-            cur.execute("""UPDATE users SET role_id=%s, status='active', mfa_mandatory=true, session_version=session_version+1
-                           WHERE id=%s AND status <> 'invited'""", (admin_role, known[0]))
+            cur.execute("""UPDATE users SET status='active', mfa_mandatory=true, session_version=session_version+1
+                           WHERE id=%s AND status <> 'invited'""", (known[0],))
             if cur.rowcount == 0:
                 raise HTTPException(409, "That person hasn't accepted their invitation yet. Resend it from the user list instead")
+            members.set_role(cur, known[0], org_id, admin_role)
+            members.set_status(cur, known[0], org_id, "active")
             cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (known[0],))
             how = "promoted"
         elif known:

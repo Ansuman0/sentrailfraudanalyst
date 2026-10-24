@@ -12,6 +12,7 @@ from app.admin_api import router
 from app.security.rbac import require
 from app.security.middleware import limiter, SecurityHeaders
 from app.security import crypto, passwords, mfa, audit
+from app.access import members
 from app import pg
 
 app = FastAPI(); app.state.limiter = limiter; app.add_middleware(SecurityHeaders); app.include_router(router); install_handlers(app)
@@ -28,11 +29,10 @@ def code_after(secret, last_step=0):
 # --- bootstrap platform admin (same as scripts/create_platform_admin.py) ---
 secret = mfa.new_secret()
 with pg.tx(platform=True) as cur:
-    cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, totp_secret_enc, mfa_enabled, status)
-                   VALUES (NULL,'00000000-0000-0000-0000-000000000002',%s,%s,%s,%s,%s,true,'active')""",
-                (crypto.encrypt("ops@sentrail.dev", None, "email"), crypto.blind_index("ops@sentrail.dev"),
-                 crypto.encrypt("Sentrail Ops", None, "name"), passwords.hash_password("platform passphrase long enough"),
-                 crypto.encrypt(secret, None, "totp")))
+    members.create_person(cur, None, '00000000-0000-0000-0000-000000000002', email_enc=crypto.encrypt("ops@sentrail.dev", None, "email"),
+                          email_bidx=crypto.blind_index("ops@sentrail.dev"), name_enc=crypto.encrypt("Sentrail Ops", None, "name"),
+                          extra={"password_hash": passwords.hash_password("platform passphrase long enough"),
+                                 "totp_secret_enc": crypto.encrypt(secret, None, "totp"), "mfa_enabled": True})
 
 def login(email, pw, secret, wait=False):
     if wait: time.sleep(31 - time.time() % 30)   # a code already used in this 30s window is rejected (replay protection)

@@ -12,6 +12,7 @@ import pyotp
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 SUPER = os.environ.get("SUPERUSER_DATABASE_URL", "postgresql://postgres:super@localhost/sentrail")
+from app.access import members
 from app import pg
 from app.main import app
 from app.access import catalogue as cat
@@ -127,7 +128,7 @@ print("# just-in-time membership")
 before = sql(SUPER, "SELECT count(*) FROM users WHERE org_id=%s", T)[0][0]
 r = company_login("new.person@sso.example.com", str(uuid.uuid4()), name="New Person")
 ok(r.status_code == 302 and "error" not in r.headers["location"] and "sentrail_rt=" in r.headers.get("set-cookie", ""), "someone nobody invited signs in through the company and gets an account")
-row = sql(SUPER, "SELECT u.status, u.auth_method, r.name, m.status FROM users u JOIN roles r ON r.id=u.role_id JOIN tenant_memberships m ON m.user_id=u.id WHERE u.org_id=%s ORDER BY u.created_at DESC LIMIT 1", T)[0]
+row = sql(SUPER, "SELECT u.status, u.auth_method, r.name, m.status FROM users u JOIN tenant_memberships m ON m.user_id=u.id JOIN roles r ON r.id=m.role_id WHERE u.org_id=%s ORDER BY u.created_at DESC LIMIT 1", T)[0]
 ok(row == ("active", "keycloak", "Compliance analyst", "active"), f"with the default role and an active membership: {row}")
 ok(sql(SUPER, "SELECT count(*) FROM users WHERE org_id=%s", T)[0][0] == before + 1, "exactly one account was created")
 ok("sso_jit_provisioned" in [a[0] for a in sql(SUPER, "SELECT action FROM audit_events WHERE org_id=%s", T)], "it is audited")

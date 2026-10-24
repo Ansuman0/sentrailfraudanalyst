@@ -83,13 +83,21 @@ people["platform:suspended admin"] = add_user(None, OLD_ADMIN, "adm2", status="s
 
 
 def effective():
-    rows = q("""SELECT u.id, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}')
-                FROM users u LEFT JOIN role_permissions rp ON rp.role_id = u.role_id GROUP BY u.id""")
+    """What each person can do: from users.role_id while it exists (before migration 018), from the memberships after it."""
+    if q("SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='role_id'")[0][0]:
+        rows = q("""SELECT u.id, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}')
+                    FROM users u LEFT JOIN role_permissions rp ON rp.role_id = u.role_id GROUP BY u.id""")
+    else:
+        rows = q("""SELECT u.id, COALESCE(array_agg(rp.perm) FILTER (WHERE rp.perm IS NOT NULL), '{}') FROM users u
+                    LEFT JOIN LATERAL (SELECT role_id FROM tenant_memberships m WHERE m.user_id = u.id AND m.tenant_id = u.org_id
+                                       UNION ALL SELECT role_id FROM platform_staff s WHERE s.user_id = u.id) x ON true
+                    LEFT JOIN role_permissions rp ON rp.role_id = x.role_id GROUP BY u.id""")
     return {r[0]: set(r[1]) for r in rows}
 
 
 before = effective()
 role_name_before = dict(q("SELECT u.id, r.name FROM users u JOIN roles r ON r.id = u.role_id"))
+users_before = q("SELECT id, org_id, role_id, status FROM users")
 
 # ---- up ----
 r = migrate()
@@ -114,7 +122,7 @@ ok(set(after[people["Northwind:Onboarding lead"]]) >= {"users.manage", "users.pi
 ok("users.pii.reveal" not in after[people["Northwind:Reader"]], "a custom role without users.manage gains nothing")
 
 # platform
-ok(q("SELECT role_id FROM users WHERE id=%s", people["platform:admin"])[0][0] == uuid.UUID(OWNER), "existing Platform admins are now Platform owners")
+ok(q("SELECT role_id FROM platform_staff WHERE user_id=%s", people["platform:admin"])[0][0] == uuid.UUID(OWNER), "existing Platform admins are now Platform owners")
 ok(q("SELECT count(*) FROM roles WHERE id=%s", OLD_ADMIN)[0][0] == 0, "the Platform admin role is gone")
 ok(set(after[people["platform:owner"]]) == set(cat.PLATFORM_PERMS), "Platform owner holds every platform permission")
 ok(after[people["platform:support"]] == {"platform.support"} and after[people["platform:auditor"]] == {"platform.audit.view"},
@@ -128,22 +136,20 @@ ok(q("SELECT count(*) FROM roles WHERE name='Organization admin'")[0][0] == 0, "
 
 # memberships
 mem = {(r[0], r[1]): (r[2], r[3]) for r in q("SELECT user_id, tenant_id, role_id, status FROM tenant_memberships")}
-tenant_users = q("SELECT id, org_id, role_id, status FROM users WHERE org_id IS NOT NULL")
+tenant_users = [t for t in users_before if t[1] is not None]
 ok(len(mem) == len(tenant_users) and all(mem[(u, o)] == (r, st) for u, o, r, st in tenant_users),
-   "one membership per tenant user, with the same role and status")
+   "one membership per tenant user, with the same role and status they had")
 staff = {r[0]: (r[1], r[2]) for r in q("SELECT user_id, role_id, status FROM platform_staff")}
-pusers = q("SELECT id, role_id, status FROM users WHERE org_id IS NULL")
-ok(len(staff) == len(pusers) and all(staff[u] == (r, st) for u, r, st in pusers), "one platform_staff row per platform user, same role and status")
+pusers = [(u, r, st) for u, o, r, st in users_before if o is None]
+ok(len(staff) == len(pusers) and all(staff[u] == (uuid.UUID(OWNER) if str(r) == OLD_ADMIN else r, st) for u, r, st in pusers),
+   "one platform_staff row per platform user, same status and the same role (old Platform admins are owners)")
 ok(q("SELECT invite_expires_at IS NULL FROM tenant_memberships WHERE user_id=%s", people["Northwind:Onboarding lead"])[0][0],
    "active memberships carry no invite expiry")
 
-# the sync trigger keeps both models in step while the old one is live
-new_uid = add_user(nw, roles[(nw, "Auditor (read-only)")], "late")
-ok(q("SELECT role_id FROM tenant_memberships WHERE user_id=%s", new_uid)[0][0] == roles[(nw, "Auditor (read-only)")], "a new user gets a membership")
-s.execute("UPDATE users SET role_id=%s, status='suspended' WHERE id=%s", (roles[(nw, "Compliance officer")], new_uid))
-ok(q("SELECT role_id, status FROM tenant_memberships WHERE user_id=%s", new_uid)[0] == (roles[(nw, "Compliance officer")], "suspended"),
-   "role and status changes follow into the membership")
-ok(q("SELECT count(*) FROM tenant_memberships WHERE user_id=%s", new_uid)[0][0] == 1, "still exactly one membership per user and tenant")
+# the old model is gone: no users.role_id and no trigger copying it into the membership tables
+ok(q("SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='role_id'")[0][0] == 0
+   and q("SELECT to_regproc('users_sync_access_model') IS NULL")[0][0], "users.role_id and the sync trigger are gone (migration 018)")
+new_uid = q("SELECT user_id FROM tenant_memberships WHERE tenant_id=%s LIMIT 1", nw)[0][0]
 try:
     s.execute("INSERT INTO tenant_memberships (user_id, tenant_id, role_id) VALUES (%s,%s,%s)", (new_uid, nw, roles[(nw, "Compliance officer")]))
     ok(False, "duplicate membership refused")
@@ -229,6 +235,9 @@ ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["plat
 
 # ---- down ----
 r = migrate("--down")
+ok(r.returncode == 0 and "reverted 018_drop_user_role_column.sql" in r.stdout and q("SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='role_id'")[0][0] == 1
+   and q("SELECT count(*) FROM users WHERE role_id IS NULL")[0][0] == 0, "migration 018 reverts first: users.role_id is back, filled from the memberships")
+r = migrate("--down")
 ok(r.returncode == 0 and "reverted 017_drop_permission_aliases.sql" in r.stdout and q("SELECT to_regclass('permission_aliases') IS NOT NULL")[0][0],
    "migration 017 reverts first: the alias table is back")
 r = migrate("--down")
@@ -272,7 +281,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout and "applied 017_drop_permission_aliases.sql" in r.stdout, "migrations 009 to 017 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout and "applied 017_drop_permission_aliases.sql" in r.stdout and "applied 018_drop_user_role_column.sql" in r.stdout, "migrations 009 to 018 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),

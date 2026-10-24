@@ -15,6 +15,7 @@ import json
 import os
 import sys
 
+from app.access import members
 from app import config, pg
 from app.admin_api import provision_org, AUTH_MODE, kc, FEATURES
 from app.security import crypto, passwords, audit
@@ -42,12 +43,9 @@ def seed_master():
     if problems:
         sys.exit("Password rejected: " + "; ".join(problems))
     with pg.tx(platform=True) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash,
-                       mfa_enabled, status, auth_method)
-                       VALUES (NULL,%s,%s,%s,%s,%s,false,'active','local')""",
-                    (PLATFORM_ROLE, crypto.encrypt(crypto.normalize_email(email), None, "email"),
-                     crypto.blind_index(email), crypto.encrypt("Platform owner", None, "name"),
-                     passwords.hash_password(pw)))
+        members.create_person(cur, None, PLATFORM_ROLE, email_enc=crypto.encrypt(crypto.normalize_email(email), None, "email"),
+                              email_bidx=crypto.blind_index(email), name_enc=crypto.encrypt("Platform owner", None, "name"),
+                              extra={"password_hash": passwords.hash_password(pw), "mfa_enabled": False, "auth_method": "local"})
         audit.write(cur, None, None, "operator", "master_login_seeded", crypto.mask_email(email), {})
     print("\nMaster login created:", crypto.mask_email(email))
     print("Two-factor is off; turn it on from My account after signing in.")
@@ -81,13 +79,10 @@ def create_demo_user(org, role_id, email, name, role, demo_pw):
         sub = kc().create_user(email, str(org) if org else "platform", email_verified=True, required_actions=["CONFIGURE_TOTP"])
         kc().set_password(sub, demo_pw)
     with pg.tx(org, platform=org is None) as cur:
-        cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash,
-                       mfa_enabled, status, idp_subject, auth_method)
-                       VALUES (%s,%s,%s,%s,%s,%s,false,'active',%s,%s)""",
-                    (org, role_id, crypto.encrypt(email, org, "email"), crypto.blind_index(email),
-                     crypto.encrypt(name, org, "name"),
-                     None if AUTH_MODE == "keycloak" else passwords.hash_password(demo_pw),
-                     sub, "keycloak" if AUTH_MODE == "keycloak" else "local"))
+        members.create_person(cur, org, role_id, email_enc=crypto.encrypt(email, org, "email"), email_bidx=crypto.blind_index(email),
+                              name_enc=crypto.encrypt(name, org, "name"),
+                              extra={"password_hash": None if AUTH_MODE == "keycloak" else passwords.hash_password(demo_pw), "mfa_enabled": False,
+                                     "idp_subject": sub, "auth_method": "keycloak" if AUTH_MODE == "keycloak" else "local"})
     print(f"  {role:<22} {email}")
 
 

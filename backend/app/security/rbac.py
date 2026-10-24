@@ -135,12 +135,14 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         return Principal(c["sub"], None, "", set(), set(), ip, session_id=c.get("sid"), mfa=second_factor_used(c),
                          scope="select", selecting=True, last_mfa_at=c.get("lmfa"))
     with pg.tx(c["org"], platform=c["org"] is None, actor=c["sub"]) as cur:
-        cur.execute("SELECT status, session_version, role_id, mfa_enabled, keycloak FROM session_user_lookup(%s)", (c["sub"],))
+        cur.execute("SELECT status, session_version, mfa_enabled, keycloak FROM session_user_lookup(%s)", (c["sub"],))
         u = cur.fetchone()
         if not u or u[0] != "active" or u[1] != c["sv"]:
             raise HTTPException(401, "Your session has ended. Sign in again")
-        status, sv, role_id, mfa_enabled, idp = u
-        user_role_id = role_id
+        status, sv, mfa_enabled, idp = u
+        cur.execute("SELECT role_id FROM platform_staff_lookup(%s) WHERE status='active'", (c["sub"],))      # who they are on the platform team
+        staff = cur.fetchone()
+        user_role_id = staff[0] if staff else None
         cur.execute("SELECT mfa_mandatory, must_rotate, break_glass FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
         own = cur.fetchone() or (False, False, False)
         mandatory, must_rotate, break_glass = bool(own[0]), bool(own[1]), bool(own[2])

@@ -35,8 +35,8 @@ class AccessIn(BaseModel):
 def _admin_addresses(org_id) -> list[str]:
     """Plain email addresses of the tenant's active Tenant admins (to be told about owner access)."""
     with pg.tx(org_id) as cur:
-        cur.execute("""SELECT u.email_enc FROM users u JOIN roles r ON r.id = u.role_id
-                       WHERE u.org_id=%s AND u.status='active' AND r.is_locked""", (org_id,))
+        cur.execute("""SELECT u.email_enc FROM tenant_memberships m JOIN users u ON u.id = m.user_id JOIN roles r ON r.id = m.role_id
+                       WHERE m.tenant_id=%s AND m.status='active' AND r.is_locked""", (org_id,))
         return [crypto.decrypt(r[0], org_id, "email") for r in cur.fetchall()]
 
 

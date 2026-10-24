@@ -48,7 +48,7 @@ printf 'REGISTRY=%s\nAPI_TAG=%s\nWEB_TAG=%s\n' "$REGISTRY" "$API_NEW" "$WEB_NEW"
 echo "== logging in to Artifact Registry, pulling images"
 gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin "${REGISTRY%%/*}" >/dev/null
 DC=(docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.gcp.yml)
-SERVICES=(postgres migrate keycloak api web caddy)       # not openbao/ollama/observability: see docs/DEPLOYMENT_GCP.md
+SERVICES=(postgres migrate keycloak api worker web caddy)       # not openbao/ollama/observability: see docs/DEPLOYMENT_GCP.md
 "${DC[@]}" pull api web migrate
 
 echo "== starting (only services whose image changed are recreated; migrations run before the API)"

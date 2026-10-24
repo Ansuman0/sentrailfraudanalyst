@@ -63,7 +63,7 @@ else
   echo "== pulling images from registry: $ECR_REGISTRY (Docker Hub or custom)"
 fi
 DC=(docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml)
-SERVICES=(postgres migrate keycloak api web caddy)       # not openbao/ollama/observability: see docs/DEPLOYMENT_AWS.md
+SERVICES=(postgres migrate keycloak api worker web caddy)       # not openbao/ollama/observability: see docs/DEPLOYMENT_AWS.md
 "${DC[@]}" pull api web migrate
 
 # Survive a stop/start of the instance: a swap file for memory headroom and a systemd unit that brings the stack up in order at
@@ -76,7 +76,7 @@ cat > /opt/sentrail/start.sh <<'START'
 # Run by sentrail.service at boot. Data (Postgres, API files, certificates) is in Docker volumes on the 30 GB root disk.
 set -euo pipefail
 cd /opt/sentrail
-exec docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml   up -d --no-build --pull never --remove-orphans postgres migrate keycloak api web caddy
+exec docker compose --env-file .env --env-file .deploy.env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.aws.yml   up -d --no-build --pull never --remove-orphans postgres migrate keycloak api worker web caddy
 START
 chmod 750 /opt/sentrail/start.sh
 cat > /etc/systemd/system/sentrail.service <<'UNIT'

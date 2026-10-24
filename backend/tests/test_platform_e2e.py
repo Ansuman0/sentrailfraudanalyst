@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from app.security.rbac import install_handlers
 CSRF = {"X-Sentrail-CSRF": "1"}
+from app.access import members
 from app import pg
 from app.security import crypto, passwords, mfa
 from app.security.middleware import limiter
@@ -38,11 +39,10 @@ def enroll(link, email, name, pw):
 # master login = platform owner (as scripts/seed.py creates it)
 owner_secret = mfa.new_secret()
 with pg.tx(platform=True) as cur:
-    cur.execute("""INSERT INTO users (org_id, role_id, email_enc, email_bidx, name_enc, password_hash, totp_secret_enc, mfa_enabled, status)
-                   VALUES (NULL,%s,%s,%s,%s,%s,%s,true,'active')""", (api.PLATFORM_OWNER_ROLE,
-                crypto.encrypt("owner@sentrail.dev", None, "email"), crypto.blind_index("owner@sentrail.dev"),
-                crypto.encrypt("Platform Owner", None, "name"), passwords.hash_password("north ridge copper window"),
-                crypto.encrypt(owner_secret, None, "totp")))
+    members.create_person(cur, None, api.PLATFORM_OWNER_ROLE, email_enc=crypto.encrypt("owner@sentrail.dev", None, "email"),
+                          email_bidx=crypto.blind_index("owner@sentrail.dev"), name_enc=crypto.encrypt("Platform Owner", None, "name"),
+                          extra={"password_hash": passwords.hash_password("north ridge copper window"),
+                                 "totp_secret_enc": crypto.encrypt(owner_secret, None, "totp"), "mfa_enabled": True})
 O = login("owner@sentrail.dev", "north ridge copper window", owner_secret)
 ok(c.get("/me", headers=O).json()["tenant"]["name"] == "Platform console", "master login lands in the platform console")
 
