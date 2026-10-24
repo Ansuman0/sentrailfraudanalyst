@@ -8,10 +8,6 @@ load_dotenv()
 ENV = os.getenv("ENV") or "production"
 IS_DEV = ENV == "dev"
 
-# Access model v2 (memberships, one Platform owner, tenant switching ...). ON by default since the cut-over (phase 9); set ACCESS_MODEL_V2=false only to roll back until the flag is removed;
-# both paths must pass the full suite while it exists. Read at request time through config, so tests can switch it.
-ACCESS_MODEL_V2 = os.getenv("ACCESS_MODEL_V2", "true").lower() == "true"
-
 # Teams and queues (optional): tenant-defined teams, alerts assignable to a team queue. Off by default; read at request time.
 def teams_enabled() -> bool:
     return os.getenv("TEAMS", "false").lower() == "true"

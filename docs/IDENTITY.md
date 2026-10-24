@@ -89,7 +89,7 @@ file. The compose file pins Keycloak 26.0; update the tag deliberately.
 
 One `POST /auth/login` serves everybody; a successful sign-in answers with `route`:
 
-| route | meaning (with `ACCESS_MODEL_V2` on) |
+| route | meaning |
 |---|---|
 | `console` | platform staff (including owners) land in the platform console and can "enter" a tenant they are a member of |
 | `tenant` | exactly one active membership: straight into that tenant |

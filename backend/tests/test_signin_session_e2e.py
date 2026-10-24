@@ -82,17 +82,7 @@ def audit_actions(org):
         return [r[0] for r in conn.execute("SELECT action FROM audit_events WHERE org_id IS NOT DISTINCT FROM %s ORDER BY seq", (org,)).fetchall()]
 
 
-# ======================= sign-in routing (old model, flag off) =======================
-config.ACCESS_MODEL_V2 = False
-r = password_login("solo" + D).json()
-ok(r["route"] == "tenant" and claims(r["access_token"])["tid"] == str(alpha) and claims(r["access_token"])["scp"] == "tenant",
-   "flag off: a tenant user lands in their tenant")
-ok(password_login("staff" + D).json()["route"] == "console", "flag off: platform staff land in the console")
-ok(c.post("/session/tenant", headers=bearer(r["access_token"]), json={"tenant_id": str(beta)}).status_code == 403,
-   "flag off: switching tenants isn't available")
-
-# ======================= routing (new model) =======================
-config.ACCESS_MODEL_V2 = True
+# ======================= routing =======================
 r = password_login("solo" + D).json()
 ok(r["route"] == "tenant" and r["tenants"][0]["name"] == "Alpha Remit", "one membership: straight into that tenant")
 tok = r["access_token"]
@@ -173,7 +163,6 @@ with psycopg.connect(SUPER, autocommit=True) as s:
 ok(cx.post("/auth/refresh").status_code == 401, "a suspended membership can't renew its session")
 with psycopg.connect(SUPER, autocommit=True) as s:
     s.execute("UPDATE tenant_memberships SET status='active' WHERE user_id=%s", (solo,))
-config.ACCESS_MODEL_V2 = False
 
 # ======================= step-up (G8) =======================
 r = two_factor_login("twofa" + D, sec, offset=-1).json()

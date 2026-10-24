@@ -157,7 +157,6 @@ def login(request: Request, response: Response, body: Login):
             if passwords.needs_rehash(pw_hash):
                 cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (passwords.hash_password(body.password), uid))
             cur.execute("UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=%s", (uid,))
-            _require_open_tenant(uid, org)
             sso_enforced = _sso_enforced(cur, org)
             if sso_enforced and not sso_emergency:
                 raise HTTPException(403, "Your organization requires company sign-in. Use your company account, not a password")
@@ -251,31 +250,9 @@ def _issue(cur, response, uid, org, role_id, sv, request, family=None, method="p
             "expires_in": int(ttl.total_seconds())}
 
 
-def _require_open_tenant(uid, org):
-    """Old model: a person whose tenant is suspended, pending or deleted is refused at sign-in (new model: the tenant is simply absent from
-    their choices). Checked as soon as the password is right, so a second factor is never asked for a tenant that can't be entered."""
-    if org is None or config.ACCESS_MODEL_V2:
-        return
-    with pg.pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT tenant_status FROM membership_lookup(%s) WHERE tenant_id=%s", (uid, org))
-        st = cur.fetchone()
-    if st and st[0] not in ("active", "trial"):
-        raise HTTPException(403, "Your organization's access is suspended or not open yet. Contact your administrator")
-
-
 def _route(uid, home_org) -> dict:
-    """Where a fresh sign-in lands (brief 3.5). Old model: the user's own organization, or the console for platform staff.
-    New model (ACCESS_MODEL_V2): platform staff -> console; exactly one active membership -> that tenant; several -> the picker
-    (a session with no tenant yet); none -> the no-access page (also tenant-less)."""
-    if not config.ACCESS_MODEL_V2:
-        if home_org is not None:
-            with pg.pool().connection() as conn, conn.cursor() as cur:
-                cur.execute("SELECT tenant_status FROM membership_lookup(%s) WHERE tenant_id=%s", (uid, home_org))
-                st = cur.fetchone()
-            if st and st[0] not in ("active", "trial"):
-                raise HTTPException(403, "Your organization's access is suspended or not open yet. Contact your administrator")
-        return {"route": "console" if home_org is None else "tenant", "org": home_org, "role_id": None,
-                "scope": "platform" if home_org is None else "tenant", "tenants": []}
+    """Where a fresh sign-in lands (brief 3.5): platform staff -> console; exactly one active membership -> that tenant; several -> the
+    picker (a session with no tenant yet); none -> the no-access page (also tenant-less)."""
     staff, mems = _memberships(uid)
     tenants = [{"id": str(m[0]), "name": m[1], "slug": m[2], "role": m[5]} for m in mems]
     if staff:
@@ -425,7 +402,7 @@ def refresh(request: Request, response: Response, sentrail_rt: str | None = Cook
                 if access_ok and asid:       # an owner inside a tenant: the access session must still be live
                     cur.execute("""SELECT 1 FROM tenant_access_sessions WHERE id=%s AND status='active' AND expires_at > now()""", (asid,))
                     access_ok = cur.fetchone() is not None
-                elif access_ok and config.ACCESS_MODEL_V2 and scope != "select":
+                elif access_ok and scope != "select":
                     staff, mems = _memberships(uid)
                     access_ok = not ((scope == "platform" and not staff) or (scope == "tenant" and tenant not in [m[0] for m in mems]))
                 if not access_ok:
@@ -683,7 +660,7 @@ def create_org(body: OrgIn, p: Principal = Depends(require("platform.tenants.man
         link, joined = None, False
         cur.execute("SELECT id FROM auth_lookup(%s)", (crypto.blind_index(body.admin_email),))
         known = cur.fetchone()
-        if known and config.ACCESS_MODEL_V2:
+        if known:
             # The email already has an account: it gets a membership in the new tenant (Tenant admin) and the tenant is live at once.
             cur.execute("""INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status) VALUES (%s,%s,%s,'active')""",
                         (known[0], org, role_ids[TENANT_ADMIN]))
@@ -1436,10 +1413,7 @@ def audit_verify(p: Principal = Depends(require_any("audit.view", "platform.audi
 
 
 def _tenant_list(p: Principal) -> list[dict]:
-    """The places this person can work: the console (platform staff) and every tenant with an active membership.
-    Only with the access model v2 (one session, one tenant at a time; the old model has exactly one)."""
-    if not config.ACCESS_MODEL_V2:
-        return []
+    """The places this person can work: the console (platform staff) and every tenant with an active membership (one session, one tenant at a time)."""
     staff, mems = _memberships(p.user_id)
     out = [{"id": str(m[0]), "name": m[1], "slug": m[2], "role": m[5], "kind": "tenant",
             "current": p.scope == "tenant" and p.org_id == str(m[0])} for m in mems]
@@ -1502,8 +1476,6 @@ def switch_tenant(request: Request, response: Response, body: TenantSwitch, p: P
     from app import owner_access
     access = owner_access.live_session(p.user_id, target) if target else None     # an owner's live access session lets them in
     staff, mems = _memberships(p.user_id)
-    if not config.ACCESS_MODEL_V2 and not access and not (target is None and staff):     # (staff may always return to the console)
-        raise HTTPException(403, "Switching tenants isn't available yet")
     if access:
         with pg.tx(platform=True, actor=p.actor) as cur:
             cur.execute("SELECT id FROM roles WHERE org_id=%s AND is_locked", (target,))
@@ -2215,7 +2187,7 @@ def assign_tenant_admin(org_id: uuid.UUID, body: AdminRecoveryIn, p: Principal =
                 raise HTTPException(409, "That person hasn't accepted their invitation yet. Resend it from the user list instead")
             cur.execute("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=%s AND revoked_at IS NULL", (known[0],))
             how = "promoted"
-        elif known and config.ACCESS_MODEL_V2:
+        elif known:
             cur.execute("""INSERT INTO tenant_memberships (user_id, tenant_id, role_id, status) VALUES (%s,%s,%s,'active')
                            ON CONFLICT (user_id, tenant_id) DO UPDATE SET role_id=EXCLUDED.role_id, status='active'""",
                         (known[0], org_id, admin_role))

@@ -187,7 +187,7 @@ jobs:
       - name: Run backend test suites with the access model v2 flag on
         run: |
           set -a; . ../.env; set +a
-          ACCESS_MODEL_V2=true           PG_SUPERUSER_URL="postgresql://postgres:${POSTGRES_SUPERUSER_PASSWORD}@127.0.0.1"           OWNER_PASSWORD="$SENTRAIL_OWNER_PASSWORD"           APP_DB_PASSWORD="$APP_DB_PASSWORD" sh tests/run_all.sh
+          PG_SUPERUSER_URL="postgresql://postgres:${POSTGRES_SUPERUSER_PASSWORD}@127.0.0.1"           OWNER_PASSWORD="$SENTRAIL_OWNER_PASSWORD"           APP_DB_PASSWORD="$APP_DB_PASSWORD" sh tests/run_all.sh
 
   # =========================================================================
   # 3. AWS CI/CD PIPELINE & DOCKER HUB

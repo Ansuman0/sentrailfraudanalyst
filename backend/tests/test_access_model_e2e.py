@@ -1,4 +1,4 @@
-"""Access model v2, phase 1, end to end: the membership-based path behind ACCESS_MODEL_V2, permission aliases, the permission cache,
+"""Access model v2, phase 1, end to end: the membership-based access model, permission aliases, the permission cache,
 the locked Tenant admin role through the API, and per-user identity encryption (including the re-encryption script).
 Needs a fresh migrated database. Run: PYTHONPATH=. AUTH_MODE=local python tests/test_access_model_e2e.py"""
 import logging
@@ -58,37 +58,25 @@ with psycopg.connect(SUPER, autocommit=True) as s:
     ok(set(r[0] for r in s.execute("SELECT perm FROM role_permissions WHERE role_id=%s", (roles[cat.TENANT_ADMIN],)).fetchall()) == set(cat.TENANT_PERMS),
        "provisioning gives the Tenant admin role every tenant permission")
 
-# ---------------- flag off (old model) ----------------
-config.ACCESS_MODEL_V2 = False
+# ---------------- the role comes from the membership ----------------
 O = login("officer@access-check.example.com")
-me = c.get("/me", headers=O).json()
-ok(me["role"] == "Compliance officer" and "str.approve" in me["permissions"], "flag off: the role comes from users.role_id")
-
-# ---------------- flag on (membership path) ----------------
-config.ACCESS_MODEL_V2 = True
-O = login("officer@access-check.example.com")
-ok(c.get("/me", headers=O).json()["role"] == "Compliance officer", "flag on: the same user, role read from the tenant membership")
+ok(c.get("/me", headers=O).json()["role"] == "Compliance officer", "the role is read from the tenant membership")
 with psycopg.connect(SUPER, autocommit=True) as s:      # change ONLY the membership: users.role_id is untouched
     s.execute("UPDATE tenant_memberships SET role_id=%s WHERE user_id=%s", (roles_by_name["Auditor (read-only)"], officer_id))
     s.execute("UPDATE users SET session_version = session_version + 1 WHERE id=%s", (officer_id,))
 ok(c.get("/me", headers=O).status_code == 401, "a membership change ends the old session (session_version bump)")
 O = login("officer@access-check.example.com")
 me = c.get("/me", headers=O).json()
-ok(me["role"] == "Auditor (read-only)" and "str.approve" not in me["permissions"], "flag on: permissions follow the membership, not users.role_id")
-config.ACCESS_MODEL_V2 = False
-ok(c.get("/me", headers=login("officer@access-check.example.com")).json()["role"] == "Compliance officer",
-   "flag off again: users.role_id is the source (both paths coexist)")
-config.ACCESS_MODEL_V2 = True
+ok(me["role"] == "Auditor (read-only)" and "str.approve" not in me["permissions"], "permissions follow the membership, not users.role_id")
 with psycopg.connect(SUPER, autocommit=True) as s:
     s.execute("UPDATE tenant_memberships SET status='suspended' WHERE user_id=%s", (officer_id,))
-ok(c.get("/me", headers=O).status_code == 401, "flag on: a suspended membership blocks the session")
+ok(c.get("/me", headers=O).status_code == 401, "a suspended membership blocks the session")
 with psycopg.connect(SUPER, autocommit=True) as s:
     s.execute("UPDATE tenant_memberships SET status='active', role_id=%s WHERE user_id=%s", (roles_by_name["Compliance officer"], officer_id))
 ok(c.get("/me", headers=login("officer@access-check.example.com")).status_code == 200, "an active membership signs in again")
 with psycopg.connect(SUPER, autocommit=True) as s:
     s.execute("DELETE FROM tenant_memberships WHERE user_id=%s", (officer_id,))
-ok(c.get("/me", headers=O).status_code == 401, "flag on: no membership in the session's tenant means no access")
-config.ACCESS_MODEL_V2 = False
+ok(c.get("/me", headers=O).status_code == 401, "no membership in the session's tenant means no access")
 
 # ---------------- permission cache (I10) ----------------
 cache.clear()

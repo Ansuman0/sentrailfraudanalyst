@@ -16,7 +16,6 @@ from app.admin_api import provision_org
 from app.security.middleware import limiter
 from helpers_access import CSRF, PW, add_user, bearer, code_at, password_login, password_token, sql, two_factor_token
 
-START_V2 = config.ACCESS_MODEL_V2          # the suite runs under both settings of the access-model flag
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg)
 limiter.enabled = False
 c = TestClient(app, headers=CSRF, base_url="https://testserver", raise_server_exceptions=False)
@@ -126,7 +125,7 @@ r = c.post(f"/platform/orgs/{T}/status", headers=O1, json={"status": "suspended"
 ok(r.status_code == 200 and org_row(T)[0] == "suspended" and org_row(T)[1] == "ticket 91: unpaid invoice", "an owner suspends it with a reason")
 ok(c.get("/me", headers=ADMIN).status_code in (401, 403), "live sessions stop at once")
 r = password_login(c, "first.admin@life.example.com")
-ok("access_token" not in r.text and (START_V2 or r.status_code in (401, 403)),
+ok("access_token" not in r.text,
    "members can't sign in to a suspended tenant (old model: refused; new model: no tenant to enter, and no session in it)")
 r = k.get("/key-check", headers=KEY)
 ok(r.status_code == 403 and "isn't active" in r.json()["detail"], "its API keys stop working")
@@ -201,18 +200,14 @@ ok(r.status_code == 200 and r.json()["how"] == "promoted", "an existing member c
 ok(sql(SUPER, "SELECT r.name, u.mfa_mandatory FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=%s", officer)[0] == ("Tenant admin", True),
    "the promoted person becomes Tenant admin with two-factor mandatory")
 r = c.post(f"/platform/orgs/{R}/admin", headers=O1, json={"email": "sixth@life.example.com", "reason": "wrong tenant on purpose"})
-ok(r.status_code == (200 if START_V2 else 409),
-   "someone who belongs to another tenant: refused in the old model (one person, one tenant); in the new model they get a membership here")
+ok(r.status_code == 200,
+   "someone who belongs to another tenant gets a membership here")
 ok(c.post(f"/platform/orgs/{T}/admin", headers=O1, json={"email": "x@life.example.com", "reason": "tenant already deleted"}).status_code == 409, "a deleted tenant can't get an admin")
 
-# ======================= an existing account becomes a membership (new model) =======================
+# ======================= an existing account becomes a membership =======================
 print("# existing account")
-config.ACCESS_MODEL_V2 = True
 r = c.post("/platform/orgs", headers=O1, json={**BODY, "legal_name": "Joined Co", "slug": "joined-co", "admin_email": "officer@life.example.com"})
 ok(r.status_code == 200 and r.json()["status"] == "active" and "dev_link" not in r.json(),
-   "new model: when the first admin's email already has an account they get a membership and the tenant is active at once")
+   "when the first admin's email already has an account they get a membership and the tenant is active at once")
 J = r.json()["org_id"]
 ok(sql(SUPER, "SELECT status FROM tenant_memberships WHERE tenant_id=%s", J)[0][0] == "active", "the membership is Tenant admin and active")
-config.ACCESS_MODEL_V2 = False
-r = c.post("/platform/orgs", headers=O1, json={**BODY, "legal_name": "Refused Co", "slug": "refused-co", "admin_email": "officer@life.example.com"})
-ok(r.status_code == 409, "old model: the same email is refused (one person, one tenant)")

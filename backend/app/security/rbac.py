@@ -170,8 +170,8 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         if asid:
             cur.execute("SELECT id FROM roles WHERE org_id=%s AND is_locked", (c["org"],))
             role_id = cur.fetchone()[0]
-        elif config.ACCESS_MODEL_V2:
-            # New model: the role comes from the membership in the session's tenant (or the platform staff row).
+        else:
+            # The role comes from the membership in the session's tenant (or the platform staff row).
             if c["org"]:
                 cur.execute("SELECT role_id, status FROM tenant_memberships WHERE user_id=%s AND tenant_id=%s", (c["sub"], c["org"]))
             else:
