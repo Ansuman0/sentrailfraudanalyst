@@ -13,7 +13,10 @@ The README has the screening request example and alert lifecycle.
 | Screening | `POST /screen` (API key), `GET /screenings/{sid}`, `POST /screenings/{sid}/override`, `POST /upload` |
 | Alerts and cases | `GET /alerts`; `GET /cases/{alert_id}`; `POST …/assign`, `…/decision`, `…/investigate`, `…/str/submit`, `…/str/approve`; `GET …/export` |
 | Search, tracing, policy | `GET /search`, `GET /wallets/{address}/trace`, `GET/PUT /policy` |
-| Organization admin | `/admin/users`, `/admin/roles`, `/admin/invitations`, `/admin/api-keys`, `/admin/features`, `/admin/security`, `/admin/sso`, `/admin/audit`, `/admin/audit/verify`, `…/reset-mfa`, `…/reveal-email` |
+| Tenant admin and other roles (by permission, see [route-permissions.md](route-permissions.md)) | `/admin/users`, `/admin/roles`, `/admin/invitations`, `/admin/api-keys`, `/admin/features`, `/admin/security`, `/admin/sso`, `/admin/audit`, `/admin/audit/verify`, `…/reset-mfa`, `…/reveal-email` |
 | Platform console | `/platform/orgs`, `/platform/plans`, `/platform/roles`, `/platform/users`, `/platform/security`, `/platform/invitations` |
+| Governance | `/admin/access-reviews*`, `/admin/audit/export`, `/admin/audit/stream`, `/admin/data-export`, `GET /me/exports/{token}`, `/admin/scim/*`, `/admin/teams*`, `/admin/access-requests*`, `/admin/users/{id}/effective-permissions`, `/admin/roles/{id}/effective` |
+| SCIM 2.0 (Enterprise, SCIM token) | `/scim/v2/Users`, `/scim/v2/Groups`, `/scim/v2/ServiceProviderConfig` |
+| Platform governance | `/platform/access*`, `/platform/approvals*`, `/platform/access-reviews*`, `POST /platform/orgs/{id}/{status,delete,admin,legal-hold,access}` |
 
 This list was taken from the route decorators in `backend/app/main.py` and `backend/app/admin_api.py`; regenerate from `/docs` if routes change.

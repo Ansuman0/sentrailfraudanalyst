@@ -88,6 +88,17 @@ transaction. A migration that changed after it was applied is refused; write a n
 | `004_lookup_role.sql` | Moves sign-in lookups to the least-privilege `sentrail_auth` role |
 | `005_platform_console.sql` | Permission scopes (platform vs organization) with a trigger that rejects mixing them; role templates seeded per login type; four platform roles; plans; platform security baseline enforced on every tenant by trigger; two-step verification forced on |
 | `006_review_fixes.sql` | Alert status CHECK and link to its screening; screening idempotency key, fiat value, stored answer and override details; API key label and timestamps; `login_throttle` for per-(email, IP) lockout |
+| `007_optional_mfa.sql`, `008_mfa_flag_in_db.sql` | Two-factor policy and its flag moved into the database |
+| `009_access_model_v2.sql` | Memberships and platform staff, permission catalogue columns, locked roles, access sessions, approvals; backfills from the old model |
+| `010_sessions_and_devices.sql` | Session binding to a tenant, step-up clock, devices, sign-in lookups |
+| `011_row_level_security_v2.sql` | Actor-aware row-level security, restricted cases, read-audit indexes |
+| `012_tenant_lifecycle.sql` | pending / active / suspended / deleted, status reasons, deletion due date |
+| `013_owner_access_and_break_glass.sql` | Owner access session decisions, legal hold, the sealed break-glass account |
+| `014_authentication_enforcement.sql` | API key controls, passkeys, company sign-in enforcement fields |
+| `015_governance_and_data_controls.sql` | SCIM, access reviews, audit streams, export links, anomaly data, job runs, tenant data removal function |
+| `016_teams.sql` | Teams, members and the alert queue column |
+| `017_drop_permission_aliases.sql` | Removes the permission alias table and the retired permission names |
+| `018_drop_user_role_column.sql` | Removes `users.role_id` and the trigger that copied it: role and status live only in memberships |
 
 ## Fresh install
 

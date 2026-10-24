@@ -9,19 +9,37 @@ server and the database. The UI hides what a role can't do only for clarity.
 
 | Role | Scope | Can | Can't |
 |---|---|---|---|
-| Platform owner | Platform | Everything in the platform console: staff, platform roles, plans, security baseline, tenants. Holds the break-glass login | See any organization's customers, cases, alerts or STRs |
-| Platform admin | Platform | Create organizations, change plans, manage platform staff (not owners), support tenants | Same as above; can't create or change platform owners or the security baseline |
+| Platform owner | Platform | Everything in the platform console: staff, platform roles, plans, security baseline, tenants. Enters an organization only through a time-limited, audited access session the organization controls. Must use a passkey (once enabled). Adding, changing or suspending an owner, deleting a tenant and loosening the baseline need a **second owner** | See any organization's customers, cases, alerts or STRs without an access session |
 | Platform support | Platform | See an organization's user list (masked emails, no names) and resend invitations, with a written reason logged in that organization's own audit log | Same as above |
 | Platform auditor | Platform | Read and verify the platform audit log | Change anything |
-| Organization admin | One organization | Invite users, assign roles, edit roles, toggle features, security settings, view audit | Decide cases (separation of duties), change their own role |
+| Tenant admin (locked role) | One organization | Every tenant permission: people, roles, security settings and sign-in (single sign-on, passkeys, API keys), SCIM, access reviews, audit export and streaming, data export, plan features. Two-factor is mandatory | Change their own role; the role can't be edited or removed |
 | Compliance officer | One organization | Everything case-related, approve STRs, change screening policy | Approve an STR they drafted |
-| Compliance analyst | One organization | Work alerts, trace wallets, override screening, draft STRs | Approve STRs, manage users |
+| Compliance analyst | One organization | Work alerts, trace wallets, draft STRs | Approve STRs, override held screenings, manage users |
 | Auditor (read-only) | One organization | View cases and audit log | Change anything |
 
-Custom roles can be created per organization and for the platform. Each permission belongs to one login
+People belong to organizations through **memberships** (a role and a status per organization), so one person can work for several and sees one at a time. Custom roles can be created per organization and for the platform; the roles screen warns when a role combines duties that should be separate. Each permission belongs to one login
 type, and a database trigger rejects any role that mixes them. The platform sets a security baseline
 (password length, inactivity, session length, retention, passkeys) that every organization must meet;
 organizations can be stricter but never looser, and two-step verification can't be turned off.
+
+## Access model (memberships, sessions, governance)
+
+* **Memberships.** `tenant_memberships` (one per person and organization) and `platform_staff` hold role and status; `users` holds identity and
+  credentials only. A suspended membership ends that person's sessions in that organization at once (every request re-checks).
+* **One permission catalogue** (`backend/app/access/catalogue.py`) defines permissions, step-up flags and templates; `docs/permissions.md` and
+  `docs/route-permissions.md` are generated from it and the API refuses to start if a route declares no permission.
+* **Sessions.** Tenant-bound, short-lived access tokens, rotating single-use refresh tokens, idle and absolute timeouts from the organization and
+  the platform baseline, CSRF header on cookie calls, step-up (a fresh second factor within 10 minutes) for sensitive actions, lockout after 10
+  failures per account and address, new-device and security notifications.
+* **Passkeys, single sign-on and API keys.** Passkeys (WebAuthn) as a second factor, required for platform owners once enabled; a company can enforce
+  single sign-on (OIDC or SAML through Keycloak) with one passkey-protected emergency login; API keys expire, can be limited to addresses and a rate,
+  rotate with a 24-hour overlap.
+* **Platform owner access** is a 60-minute session (one extension) the organization allows, approves or refuses; every action is in both audit logs.
+* **Governance.** Quarterly access reviews, dormant-member suspension, SCIM provisioning (Enterprise), signed audit exports and SIEM streaming,
+  export limits with watermarks and single-use links, anomaly alerts, full-tenant data export and removal after retention.
+* **Separation of duties.** Four-eyes for STRs; second-owner approval for the highest-risk platform actions; warnings for roles that combine duties.
+
+Runbook: [docs/RUNBOOK_ACCESS.md](docs/RUNBOOK_ACCESS.md). Evidence for auditors: [docs/soc2-access-evidence.md](docs/soc2-access-evidence.md).
 
 ## Controls
 

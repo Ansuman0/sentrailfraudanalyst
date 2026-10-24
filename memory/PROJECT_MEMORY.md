@@ -106,3 +106,11 @@ frontend/ (React 18 + TS, Vite)  ──Bearer token──▶  backend/ (FastAPI,
   retention) and company SSO domain setup exist since 2026-10-17, and platform plans (Plans screen, org plan selector); platform security baseline; platform roles and staff do not), graph view of traces.
 - Keycloak, OpenBao and Ollama have not been run end to end in this environment; tests simulate Keycloak,
   chain APIs and OFAC.
+
+## Access model v2 (2026-10-24) — architecture, replaces the old one-role-per-user description above
+* People: `users` (identity, credentials, two-factor, account status, home organization `org_id` for row-level security and encryption context). Role and status per place: `tenant_memberships` (one per person and tenant) and `platform_staff`. All creation and changes go through `backend/app/access/members.py`. There is no `users.role_id`, no flag, no permission aliases.
+* Permissions: one catalogue (`backend/app/access/catalogue.py`) -> generated `docs/permissions.md`, `docs/route-permissions.md`; routes must declare a permission or the API won't start. Locked Tenant admin role (every tenant permission), one Platform owner role, separation-of-duties warnings, teams behind `TEAMS`.
+* Sessions: tenant-bound tokens, refresh families, step-up, live-session check per request, passkeys, enforced company sign-in (Keycloak brokers OIDC and SAML), owner access sessions the tenant controls, second-owner approvals, break-glass.
+* Governance: worker container (`scripts/run_jobs`), dormant sweep, access reviews, SCIM, signed audit export and streaming, export controls, anomaly alerts, tenant data export and removal after retention (`purge_tenant_audit` is the only thing that cuts the audit log).
+* Isolation proof: `tests/test_isolation_e2e.py` (every route and every job for tenant A against tenant B), `tests/test_roles_e2e.py` (every built-in role against every route), `tests/test_settings_enforcement_e2e.py` (every stored security setting).
+* Migrations 009 to 018, all reversible. Cut-over and rollback: `docs/CUTOVER.md`; runbook: `docs/RUNBOOK_ACCESS.md`.

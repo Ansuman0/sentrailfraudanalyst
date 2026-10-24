@@ -7,7 +7,7 @@ crypto deposits and withdrawals in real time, scores bank, card and crypto activ
 on public blockchains, and drafts STRs with a local open-source model. Analysts make every decision,
 and every action is recorded in a tamper-evident audit log.
 
-Docs: [Local development](docs/LOCAL_DEVELOPMENT.md) · [Changes](CHANGES.md) · [Security design](SECURITY.md) · [Identity and sign-in](docs/IDENTITY.md) · [Roles and permissions](docs/ROLES.md) · [Database](docs/DATABASE.md) · [Table reference](docs/schema-tables.md)
+Docs: [Access runbook](docs/RUNBOOK_ACCESS.md) · [Cut-over](docs/CUTOVER.md) · [Local development](docs/LOCAL_DEVELOPMENT.md) · [Changes](CHANGES.md) · [Security design](SECURITY.md) · [Identity and sign-in](docs/IDENTITY.md) · [Roles and permissions](docs/ROLES.md) · [Database](docs/DATABASE.md) · [Table reference](docs/schema-tables.md)
 
 ## Architecture
 
@@ -73,6 +73,25 @@ Frontend: `cd frontend && npm test && npm run typecheck && npm run build`.
 | `platform_e2e` | 27 | Platform roles, plans, security baseline, support access |
 | `cases_e2e` | 78 | Screening, idempotency, alert lifecycle, STR four-eyes, overrides, export, API keys, session limits, throttling, user-chosen/mandatory two-factor and its DB flag, sign-in error handling |
 | `frontend` (Vitest) | 23 | Single-flight token refresh, 401 retry, memory-only token, open-redirect guard, route guards by permission, two-factor gate |
+
+## Access control and security
+
+People work for organizations through **memberships**: a role and a status per organization (one person, several organizations, one at a time), and
+Sentrail's own staff are a separate platform team. Every permission is defined once in `backend/app/access/catalogue.py`; the generated
+[permissions](docs/permissions.md) and [route permissions](docs/route-permissions.md) show who may do what, and the API refuses to start if a route
+has no declared permission. The server enforces everything; the web app only hides what a role can't use (and the tests prove the API refuses it anyway).
+
+* **Sign-in:** one account, password plus authenticator app or passkey; tenant picker for people in several organizations; fresh second factor for
+  sensitive actions; company single sign-on (OIDC or SAML through Keycloak) can be enforced per organization.
+* **Isolation:** PostgreSQL row-level security on every tenant table, plus membership checks; restricted (need-to-know) cases; a cross-tenant test
+  runs every route and every background job against two tenants.
+* **Platform staff** never see customer data except through a time-limited access session the organization controls; owners approve each other's
+  highest-risk actions; a sealed break-glass account exists for emergencies.
+* **Governance:** access reviews, dormant-member suspension, SCIM, signed audit export and streaming, export limits, anomaly alerts, data export and removal.
+* **Background jobs** run in the `worker` container (`python -m scripts.run_jobs`).
+
+Read [Security design](SECURITY.md), [Identity and sign-in](docs/IDENTITY.md), the [access runbook](docs/RUNBOOK_ACCESS.md) (break-glass, owner access,
+tenant recovery), the [cut-over guide](docs/CUTOVER.md) and the [SOC 2 evidence guide](docs/soc2-access-evidence.md).
 
 ## API
 
