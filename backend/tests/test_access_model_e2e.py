@@ -1,4 +1,4 @@
-"""Access model v2, phase 1, end to end: the membership-based access model, permission aliases, the permission cache,
+"""Access model v2, phase 1, end to end: the membership-based access model, the permission cache,
 the locked Tenant admin role through the API, and per-user identity encryption (including the re-encryption script).
 Needs a fresh migrated database. Run: PYTHONPATH=. AUTH_MODE=local python tests/test_access_model_e2e.py"""
 import logging
@@ -104,22 +104,11 @@ R = login("reader@access-check.example.com")
 perms = c.get("/me", headers=R).json()["permissions"]
 ok("audit.view" in perms and "cases.view" not in perms, "after the edit the new permission set is used, not the cached one")
 
-# ---------------- aliases (G19) ----------------
-records = []
-class Capture(logging.Handler):
-    def emit(self, record): records.append(record)
-logging.getLogger("sentrail.access").addHandler(Capture()); logging.getLogger("sentrail.access").setLevel(logging.INFO)
+# ---------------- renamed permissions (G19) ----------------
 OW = login("owner@access-check.example.com")
 mine = c.get("/me", headers=OW).json()
-ok("platform.tenants.manage" in mine["permissions"] and "orgs.manage" in mine["permissions"],
-   "a Platform owner holds the new name and still shows the old alias until the cut-over")
-records.clear()
-holder = rbac.Principal("u1", None, "Platform owner", {"platform.tenants.manage", "orgs.manage"}, set(), None, alias_names={"orgs.manage"})
-ok(holder.can("platform.tenants.manage") and not any(getattr(x, "event", "") == "permission_alias_used" for x in records),
-   "using the new name is not an alias use")
-ok(holder.can("orgs.manage") and any(getattr(x, "event", "") == "permission_alias_used" and getattr(x, "permission", "") == "orgs.manage" for x in records),
-   "asking for an old name still works and is logged as permission_alias_used")
-ok(c.get("/platform/orgs", headers=OW).status_code == 200, "the platform routes now ask for platform.tenants.manage and work for the owner")
+ok("platform.tenants.manage" in mine["permissions"] and not set(cat.RETIRED_PERMISSIONS) & set(mine["permissions"]), "a Platform owner holds the new name and no old alias exists")
+ok(c.get("/platform/orgs", headers=OW).status_code == 200, "the platform routes ask for platform.tenants.manage and work for the owner")
 
 # ---------------- locked Tenant admin through the API ----------------
 lead = c.post("/admin/roles", headers=A, json={"name": "Role keeper", "perms": ["roles.manage", "users.manage"]}).json()["id"]

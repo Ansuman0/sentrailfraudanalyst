@@ -1,5 +1,7 @@
 # Access control: current state (Phase 0 discovery)
 
+> **Historical snapshot.** This is the discovery report written *before* the access model was rebuilt (phase 0). It describes the old model, so it still names permissions and roles that no longer exist (for example `orgs.manage`, now `platform.tenants.manage`). For how things work now, read [IDENTITY.md](IDENTITY.md), [permissions.md](permissions.md) and [route-permissions.md](route-permissions.md).
+
 Written 2026-10-23 against commit `37c90f1` (branch `main`). Read-only discovery for the access-control rebuild: no application code or migration was changed.
 Everything below was read from the code; "not found" means a search of `backend/app`, `backend/scripts` and `backend/migrations` returned nothing.
 

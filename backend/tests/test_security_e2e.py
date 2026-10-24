@@ -106,7 +106,7 @@ r = c.patch(f"/admin/users/{me['id']}", headers=A1, json={"status":"suspended"})
 ok(r.status_code == 403, "admin can't suspend themselves")
 r = c.put(f"/admin/roles/{roles['Tenant admin']}", headers=A1, json={"name":"Tenant admin","perms":["users.manage","roles.manage","cases.decide"]})
 ok(r.status_code == 403, "admin can't change permissions of their own role (no self-escalation)")
-r = c.put(f"/admin/roles/{roles['Compliance analyst']}", headers=A1, json={"name":"Compliance analyst","perms":["cases.view","orgs.manage"]})
+r = c.put(f"/admin/roles/{roles['Compliance analyst']}", headers=A1, json={"name":"Compliance analyst","perms":["cases.view","platform.tenants.manage"]})
 ok(r.status_code == 422, "platform permission can't be given to an org role")
 
 ravi = [u for u in c.get("/admin/users", headers=A1).json() if u["name"]=="Ravi Kumar"][0]

@@ -20,10 +20,10 @@ ok({r["path"] for r in table if r["kind"] == "session"} <= {r["path"] for r in t
 ok({(r["method"], r["path"]) for r in table if r["kind"] == "api_key"} == {("POST", "/screen")}, "only /screen takes an API key")
 
 # every permission a route asks for exists (a typo would silently lock everyone out)
-known = {p.key for p in cat.PERMISSIONS} | set(cat.ALIASES)
+known = {p.key for p in cat.PERMISSIONS}
 asked = {p for r in table for p in r["perms"]}
 ok(asked <= known, f"every permission a route asks for is in the catalogue: {sorted(asked - known)}")
-ok(not (asked & set(cat.ALIASES)), "no route asks for an old permission name any more (aliases are for old callers only)")
+ok(not (asked & set(cat.RETIRED_PERMISSIONS)), "no route asks for a retired permission name")
 # the split of users.manage: sensitive admin routes ask for their own permission
 by_route = {(r["method"], r["path"]): r["perms"] for r in table}
 ok(by_route[("GET", "/admin/security")] == ["security.manage"] and by_route[("PUT", "/admin/security")] == ["security.manage"], "security settings need security.manage")
@@ -58,3 +58,17 @@ except RuntimeError as e:
 doc = Path(__file__).resolve().parents[2] / "docs" / "route-permissions.md"
 ok(doc.exists() and doc.read_text(encoding="utf-8").replace("\r\n", "\n") == routes.render_markdown(app).replace("\r\n", "\n"),
    "docs/route-permissions.md is current (regenerate: python -m scripts.gen_route_doc)")
+
+# ---- no old permission name survives anywhere outside the migrations, the catalogue that retires it and the historical snapshot ----
+import re
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+old = re.compile("|".join(re.escape(n) for n in cat.RETIRED_PERMISSIONS))
+skip_dirs = {"node_modules", ".venv", "migrations", "memory", ".git", "__pycache__", "dist"}
+skip_files = {"catalogue.py", "test_access_model_migration.py", "access-control-current-state.md", "test_routes_unit.py"}
+hits = []
+for f in root.rglob("*"):
+    if f.is_file() and f.suffix in {".py", ".ts", ".tsx", ".md", ".yml", ".yaml", ".json", ".sh", ".tf", ".sql"} and f.name not in skip_files             and not (set(f.relative_to(root).parts) & skip_dirs):
+        if old.search(f.read_text(encoding="utf-8", errors="ignore")):
+            hits.append(str(f.relative_to(root)))
+ok(not hits, f"no retired permission name is referenced anywhere in code, tests or docs: {hits}")

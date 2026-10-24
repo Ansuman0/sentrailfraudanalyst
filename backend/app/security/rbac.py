@@ -37,7 +37,6 @@ class Principal:
     session_id: str | None = None   # refresh-token family of this sign-in (access token "sid" claim)
     mfa: bool = True                # this sign-in used a second factor (TOTP, recovery code or the IdP's)
     mfa_setup: str | None = None    # "required" | "optional" while the user has no 2FA; None once it's on
-    alias_names: set = field(default_factory=set)   # old permission names this user holds only through a renamed permission
     scope: str = "tenant"           # "tenant" | "platform" | "select" (signed in, tenant not chosen yet)
     access_session_id: str | None = None   # a platform owner working inside a tenant through an access session
     must_rotate: bool = False       # the break-glass account was just used: the password has to be changed first
@@ -60,10 +59,6 @@ class Principal:
         return self.org_id is None
 
     def can(self, perm: str) -> bool:
-        if perm in self.alias_names:
-            # An old permission name is still being asked for. Logged so the cut-over (phase 9) can see when none are left.
-            log.info("permission alias used", extra={"event": "permission_alias_used", "user_id": self.user_id, "org_id": self.org_id,
-                                                     "permission": perm})
         return perm in self.perms
 
 
@@ -213,14 +208,14 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         org_requires = True       # every Tenant admin (the role holds every tenant permission): two-factor is not optional for them
     if not c["org"] and row[2] != "Platform owner":
         org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
-    perms, alias_names = catalogue.expand_aliases(set(row[3]))
+    perms = set(row[3])
     mfa_used = second_factor_used(c)
     has_second = bool(row[4]) or n_pk > 0          # an authenticator app or at least one passkey
     if has_second and not mfa_used:
         # Two-factor is on for this account, so a password-only session isn't enough (enabling it ends those sessions).
         raise HTTPException(401, "Two-factor verification required")
     return Principal(c["sub"], c["org"], row[2], perms, features, ip, session_id=c.get("sid"), mfa=mfa_used,
-                     mfa_setup=mfa_setup_state(org_requires, has_second, row[5]), alias_names=alias_names,
+                     mfa_setup=mfa_setup_state(org_requires, has_second, row[5]),
                      scope=scope, last_mfa_at=c.get("lmfa"), access_session_id=asid, must_rotate=must_rotate,
                      must_enroll_passkey=must_enroll, passkey_count=n_pk)
 

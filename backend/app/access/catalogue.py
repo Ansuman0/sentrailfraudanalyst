@@ -4,7 +4,6 @@ Everything else is derived from here:
   - `sync(conn)` makes the database match (permissions, templates, aliases, the locked Tenant admin role, the Platform owner role);
     `scripts/migrate.py` runs it after the SQL migrations, so a new permission is one edit in this file.
   - `render_markdown()` generates docs/permissions.md (`python -m scripts.gen_permissions_doc`); a unit test fails when the file is stale.
-  - rbac uses ALIASES so the old permission names keep working until the cut-over (Phase 9).
 
 Access model spec: sections 3.3 (tenant matrix), 3.4 (platform matrix) and 3.2 (roles) of the access-control brief.
 """
@@ -110,20 +109,9 @@ TEMPLATES: list[Template] = [
 ]
 TEMPLATE_BY_NAME = {t.name: t for t in TEMPLATES}
 
-# Old permission name -> the new name(s) that satisfy it. Kept until the cut-over (Phase 9); every use is logged by rbac.
-# `users.manage` keeps its name: the split creates users.pii.reveal, security.manage and apikeys.manage, and migration 009 grants
-# those to every role that held users.manage, so nobody loses access while the routes still ask for users.manage.
-ALIASES: dict[str, tuple[str, ...]] = {
-    "orgs.manage": ("platform.tenants.manage",),
-    "orgs.delete": ("platform.tenants.delete",),
-}
+# Names that existed before access model v2 and no longer do (migration 017 removed them for good): nothing may ask for them.
+RETIRED_PERMISSIONS = ("orgs.manage", "orgs.delete")
 RETIRED_ROLES = {"Platform admin": PLATFORM_OWNER, "Organization admin": TENANT_ADMIN}
-
-
-def expand_aliases(perms: set[str]) -> tuple[set[str], set[str]]:
-    """Add the old names a holder of the new permissions is still entitled to. Returns (all names, the alias names added)."""
-    added = {old for old, new in ALIASES.items() if old not in perms and any(n in perms for n in new)}
-    return perms | added, added
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -133,7 +121,7 @@ def sync(conn) -> dict:
     """Make the database match this file. Idempotent. `conn` is a psycopg connection for the schema owner (not in a transaction).
 
     Never removes a permission from a role someone may have customised; it only
-      - upserts permissions, templates and aliases,
+      - upserts permissions and templates,
       - gives the Platform owner role every platform permission and the locked Tenant admin roles every tenant permission,
         and ends the sessions of the holders when that added something (they reload their permissions on the next request).
     """
@@ -154,9 +142,6 @@ def sync(conn) -> dict:
             for perm in t.perms:
                 conn.execute("INSERT INTO role_template_permissions VALUES (%s,%s)", (t.name, perm))
         conn.execute("DELETE FROM role_templates WHERE name <> ALL(%s)", ([t.name for t in TEMPLATES],))
-        for old, new in ALIASES.items():
-            conn.execute("""INSERT INTO permission_aliases (old_key, new_keys) VALUES (%s,%s)
-                            ON CONFLICT (old_key) DO UPDATE SET new_keys=EXCLUDED.new_keys""", (old, list(new)))
 
         # Platform owner: every platform permission.
         added = conn.execute("""INSERT INTO role_permissions SELECT %s, key FROM permissions WHERE scope='platform'
@@ -204,9 +189,7 @@ def render_markdown() -> str:
     out += _matrix(PLATFORM)
     out += ["", f"**{PLATFORM_OWNER}** holds every platform permission (an explicit list generated from this catalogue). "
                 "It replaces the former Platform admin role.", "",
-            "## Permission aliases (kept until the cut-over)", "",
-            "| Old name | Satisfied by |", "|---|---|"]
-    out += [f"| `{old}` | " + ", ".join(f"`{n}`" for n in new) + " |" for old, new in sorted(ALIASES.items())]
-    out += ["", "`users.manage` keeps its name; its former extra powers are the separate permissions `users.pii.reveal`, "
+            ""]
+    out += ["`users.manage` keeps its name; its former extra powers are the separate permissions `users.pii.reveal`, "
                 "`security.manage` and `apikeys.manage`.", ""]
     return "\n".join(out)

@@ -65,9 +65,6 @@ for name, (scope, tok, uid, role_id) in people.items():
     for r in table:
         needed = r["perms"]
         may = (any(p in mine for p in needed) if r["any"] else all(p in mine for p in needed))
-        # a permission held only through an old name still counts (the alias is resolved by the API, not by this test)
-        if not may and not r["any"]:
-            may = all(p in mine or any(p in al for k, al in cat.ALIASES.items() if k in mine) for p in needed)
         status = call(tok, r).status_code
         checked += 1
         if may and status in (401, 403):

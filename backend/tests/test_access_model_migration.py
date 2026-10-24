@@ -202,8 +202,8 @@ for t, p in q("SELECT template, perm FROM role_template_permissions"):
     tp.setdefault(t, set()).add(p)
 ok(all(tp[t.name] == set(t.perms) for t in cat.TEMPLATES) and set(tp) == {t.name for t in cat.TEMPLATES},
    "role templates equal the catalogue")
-ok(q("SELECT old_key, new_keys FROM permission_aliases ORDER BY 1") == [(k, list(v)) for k, v in sorted(cat.ALIASES.items())],
-   "permission_aliases equals the catalogue")
+ok(q("SELECT to_regclass('permission_aliases') IS NULL")[0][0] and q("SELECT count(*) FROM permissions WHERE key = ANY(%s)", list(cat.RETIRED_PERMISSIONS))[0][0] == 0,
+   "there is no alias table and no retired permission")
 with psycopg.connect(OWNER_URL, autocommit=True) as oc:
     ok(cat.sync(oc) == {"owner_added": 0, "tenant_admin_added": 0}, "catalogue sync is idempotent")
     try:
@@ -228,6 +228,9 @@ ok(q("SELECT role_name FROM platform_staff_lookup(%s)", people["platform:admin"]
 ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["platform:owner"])[0][0] == "active", "session_user_lookup answers for any user")
 
 # ---- down ----
+r = migrate("--down")
+ok(r.returncode == 0 and "reverted 017_drop_permission_aliases.sql" in r.stdout and q("SELECT to_regclass('permission_aliases') IS NOT NULL")[0][0],
+   "migration 017 reverts first: the alias table is back")
 r = migrate("--down")
 ok(r.returncode == 0 and "reverted 016_teams.sql" in r.stdout and q("SELECT to_regclass('teams') IS NULL")[0][0], "migration 016 reverts first")
 r = migrate("--down")
@@ -269,7 +272,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout, "migrations 009 to 016 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout and "applied 017_drop_permission_aliases.sql" in r.stdout, "migrations 009 to 017 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),

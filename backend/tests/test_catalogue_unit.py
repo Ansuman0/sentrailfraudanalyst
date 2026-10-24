@@ -25,12 +25,7 @@ analyst = set(cat.TEMPLATE_BY_NAME["Compliance analyst"].perms)
 ok("str.approve" in officer and "str.approve" not in analyst and "screening.override" not in analyst,
    "analyst can't approve STRs or override held screenings; officer can")
 ok(cat.TEMPLATE_BY_NAME["Auditor (read-only)"].perms == ("cases.view", "audit.view", "audit.export"), "auditor is read-only plus audit export")
-ok(all(new in keys for news in cat.ALIASES.values() for new in news) and not set(cat.ALIASES) & set(keys), "aliases point at defined names and old names are gone")
-
-perms, added = cat.expand_aliases({"platform.tenants.manage", "platform.support"})
-ok("orgs.manage" in perms and added == {"orgs.manage"}, "holders of platform.tenants.manage still satisfy the old name orgs.manage")
-perms, added = cat.expand_aliases({"platform.support"})
-ok("orgs.manage" not in perms and not added, "an alias is not granted to someone without the new permission")
+ok(not set(cat.RETIRED_PERMISSIONS) & set(keys), "the retired permission names are gone from the catalogue")
 
 doc = Path(__file__).resolve().parents[2] / "docs" / "permissions.md"
 ok(doc.exists() and doc.read_text(encoding="utf-8").replace("\r\n", "\n") == cat.render_markdown().replace("\r\n", "\n"),

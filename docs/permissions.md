@@ -49,11 +49,5 @@ Every signed-in user can also view their own profile, set up their own two-facto
 
 **Platform owner** holds every platform permission (an explicit list generated from this catalogue). It replaces the former Platform admin role.
 
-## Permission aliases (kept until the cut-over)
-
-| Old name | Satisfied by |
-|---|---|
-| `orgs.delete` | `platform.tenants.delete` |
-| `orgs.manage` | `platform.tenants.manage` |
 
 `users.manage` keeps its name; its former extra powers are the separate permissions `users.pii.reveal`, `security.manage` and `apikeys.manage`.

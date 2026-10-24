@@ -50,7 +50,7 @@ ok(c.get("/me", headers=O).json()["tenant"]["name"] == "Platform console", "mast
 pr = c.get("/platform/roles", headers=O).json()
 names = {r["name"]: r for r in pr["roles"]}
 ok(set(names) == {"Platform owner", "Platform support", "Platform auditor"}
-   and all(p["key"] == "orgs.manage" or p["key"].startswith("platform.") for p in pr["permissions"]),
+   and all(p["key"].startswith("platform.") for p in pr["permissions"]),
    "platform console has its own seeded roles and only platform permissions")
 with psycopg.connect(SUPER) as s:
     tmpl = dict(s.execute("SELECT scope, count(*) FROM role_templates GROUP BY scope").fetchall())

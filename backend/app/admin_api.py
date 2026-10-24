@@ -1134,7 +1134,7 @@ class RoleIn(BaseModel):
     @field_validator("perms")
     @classmethod
     def tenant_only(cls, v):
-        if any(x in ("orgs.manage", "orgs.delete") or x.startswith("platform.") for x in v):
+        if any(x in catalogue.RETIRED_PERMISSIONS or x.startswith("platform.") for x in v):
             raise ValueError("Platform permissions can't be given to organization roles")
         return v
 
