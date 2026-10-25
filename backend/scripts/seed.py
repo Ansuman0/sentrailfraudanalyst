@@ -2,6 +2,7 @@
 
   python -m scripts.seed                 # master login only (production-safe)
   python -m scripts.seed --demo          # plus two demo tenants with a user for every role and sample alerts
+  python -m scripts.seed --demo --replace   # also replace demo people that already exist (new password, same roles); demo only
 
 Master login: a local break-glass platform admin (password; two-factor is the person's choice). It keeps working if Keycloak
 is down. Credentials come from SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD (or a prompt). Running the
@@ -31,6 +32,25 @@ def exists(email) -> bool:
     with pg.pool().connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT 1 FROM auth_lookup(%s)", (crypto.blind_index(email),))
         return cur.fetchone() is not None
+
+
+def remove_person(email):
+    """Demo only (--replace): delete the person (their memberships go with them; the audit trail keeps their id) so they can be created again."""
+    with pg.pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM auth_lookup(%s)", (crypto.blind_index(email),))
+        row = cur.fetchone()
+    if not row:
+        return
+    with pg.tx(platform=True) as cur:
+        cur.execute("SELECT idp_subject FROM users WHERE id=%s", (row[0],))
+        subj = (cur.fetchone() or [None])[0]
+        if AUTH_MODE == "keycloak" and subj:
+            try:
+                kc().delete_user(subj)
+            except Exception as e:                    # noqa: BLE001 - a person already gone from Keycloak is fine
+                print(f"  (Keycloak: {type(e).__name__} for {email}, continuing)")
+        cur.execute("DELETE FROM users WHERE id=%s", (row[0],))
+    print(f"  replaced {email}")
 
 
 def seed_master():
@@ -90,14 +110,27 @@ def seed_demo():
     demo_pw = os.environ.get("SEED_DEMO_PASSWORD") or getpass.getpass("Password for all demo users (14+ characters): ")
     print("\nPlatform team")
     for email, name, role in DEMO_PLATFORM_STAFF:
+        if exists(email) and "--replace" in sys.argv:
+            remove_person(email)
         if exists(email):
             print(f"  {email} already exists"); continue
         create_demo_user(None, PLATFORM_ROLES[role], email, name, role, demo_pw)
     for t in DEMO:
-        if exists(t["users"][0][0]):
+        if "--replace" in sys.argv:
+            for email, _, _ in t["users"]:
+                remove_person(email)
+        elif exists(t["users"][0][0]):
             print(f"{t['name']} already seeded, skipping"); continue
         with pg.tx(platform=True) as cur:
-            org, roles = provision_org(cur, t["name"], t["type"], t["reg"], plan=t["plan"], environment=t["env"], brand_color=t["color"])
+            cur.execute("SELECT id FROM organizations WHERE registration=%s", (t["reg"],))
+            found = cur.fetchone()
+            if found:      # --replace on a database that already has the demo organization: keep it, give it its people again
+                org = found[0]
+                cur.execute("SELECT name, id FROM roles WHERE org_id=%s", (org,))
+                roles = dict(cur.fetchall())
+                print(f"{t['name']} already exists, adding its people again")
+            else:
+                org, roles = provision_org(cur, t["name"], t["type"], t["reg"], plan=t["plan"], environment=t["env"], brand_color=t["color"])
             if t["sso_domain"]:   # demo only: real tenants prove the domain with a DNS TXT record (/admin/sso/verify)
                 cur.execute("UPDATE organizations SET sso_domain=%s, sso_idp_alias=%s, sso_enforced=true WHERE id=%s",
                             (t["sso_domain"], t["idp_alias"], org))

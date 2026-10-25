@@ -37,17 +37,23 @@ two-factor is mandatory for Tenant admins and for every platform person except t
 Goal: prove the migrations and the checks on **your real data** before touching the live database.
 
 ```
-# 1. restore the dump into a scratch database on any Postgres 16 that has the project's roles (the compose postgres does)
-createdb -h 127.0.0.1 -U postgres -O sentrail_owner sentrail_rehearsal
-pg_restore -h 127.0.0.1 -U postgres -d sentrail_rehearsal --no-owner --role=sentrail_owner sentrail-before-cutover.dump
+# 1. restore the dump into a scratch database, KEEPING the object owners (the sign-in lookups belong to sentrail_auth: restoring them as
+#    another owner makes them blind). On the project's compose postgres, as the superuser:
+psql -h 127.0.0.1 -U sentrail_owner -c "CREATE ROLE sentrail_app LOGIN"       # (only on a server that has never run the app: migration 001 normally creates it)
+psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE sentrail_rehearsal OWNER sentrail_owner"
+pg_restore -h 127.0.0.1 -U postgres -d sentrail_rehearsal sentrail-before-cutover.dump
 
 # 2. migrate it exactly as the deployment will
 cd backend
 OWNER_DATABASE_URL=postgresql://sentrail_owner:...@127.0.0.1/sentrail_rehearsal python -m scripts.migrate
 
-# 3. check it (read-only; prints no personal data)
+# 3. check it (read-only; prints no personal data, needs no encryption keys)
 DATABASE_URL=postgresql://sentrail_app:...@127.0.0.1/sentrail_rehearsal python -m scripts.cutover_check
 ```
+Do **not** copy the production encryption keys to your machine for this. Without them the people and cases in the copy can't be decrypted
+locally (a Users list over the old demo organizations answers an error: that is expected); everything the check and the migrations do works on
+the stored structure. Sign-in on the copy works for people created locally (for example `python -m scripts.seed --demo --replace`).
+
 `cutover_check` confirms: every migration applied; every person has a place (membership or platform staff row); every active organization has an
 active Tenant admin; at least one active Platform owner; at most one break-glass account; no retired permission or role; locked roles hold every
 permission; **every audit chain (platform and each organization) still verifies**. Any FAIL is a reason to stop and read the message: migration 018
@@ -70,7 +76,11 @@ first, 018 down to 009), `cutover_check` is not expected to pass on an old schem
 4. **Owners: register a passkey** (Sentrail asks at next sign-in). Only when every owner has one, turn on *passkeys only for platform staff* under
    Security baseline (it is off by default so nobody is locked out).
 5. Create the break-glass account if there is none (`python -m scripts.create_break_glass`, see [RUNBOOK_ACCESS.md](RUNBOOK_ACCESS.md)).
-6. If you chose `AUTH_MODE=local`: set it in Secrets Manager, redeploy, re-seed the demo people (above), and delete the old Keycloak demo users.
+6. Demo people: the common demo password is in `.demo-credentials.txt` (git-ignored, not on the server). Apply it with
+   `docker compose ... exec -T -e SEED_DEMO_PASSWORD=<the password> api python -m scripts.seed --demo --replace` (the secret needs `ENV=dev`
+   for demo seeding). `--replace` deletes the existing demo people (and their Keycloak users in Keycloak mode) and creates them again with that
+   password and the same roles; the organizations and their data stay. Everyone except the platform owner sets up two-factor at first sign-in.
+   If you also choose `AUTH_MODE=local`, set it in Secrets Manager and redeploy before running this.
 
 ## Backing out
 
