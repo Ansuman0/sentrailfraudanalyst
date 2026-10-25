@@ -244,6 +244,15 @@ Tenant jobs: `dormant_sweep`, `review_cycle`, `audit_stream`, `expire_exports`. 
 
 **Offboarding.** `POST /admin/data-export` (`data.export`) gives the whole tenant (organization, people, roles, cases, STRs, screenings, settings, audit log with its chain result) as one signed file, without any secret. A deleted tenant keeps its data until `deletion_due_at`; then `purge_deleted_tenants` removes every row carrying the tenant's id (discovered from the schema, so a new table can't be forgotten), keeps people who also belong to another tenant (they lose only this membership), blanks the organization row (it stays as a tombstone so the slug is never reused), and writes `tenant_data_removed` into the platform log with the counts and the final hash of the tenant's audit chain.
 
+## Two-factor policy (platform setting)
+
+Two-factor is each person's choice (turn it on from My account) unless something makes it mandatory: an organization's own `mfa_required`, and the
+platform setting **`require_two_factor_admins`** (Security baseline screen; default **on**), which makes it mandatory for Tenant admins and for platform
+staff other than the owner. With it on, those people can't use the app until two-factor is set up. With it off they sign in straight away and can turn
+two-factor on later from My account. Turning it off is a loosening of the baseline, so a second owner has to approve it. `python -m scripts.seed --demo`
+turns it off (demo environments only; it refuses to run in production) and no longer forces anyone through setup at first sign-in. The API enforces the
+setting on every request (proof in `tests/test_settings_enforcement_e2e.py`).
+
 ## Admin screens and teams (phase 8)
 
 **Who sees what.** Every screen hides what a role can't use, and the server refuses it anyway: `tests/test_roles_e2e.py` signs in as every built-in role and calls every permission-protected route (the allowed ones must open, every other one must answer 401/403), and `frontend/src/pages/Governance.test.tsx` checks the navigation and the "No access" page for each role (the role permissions come from `frontend/src/test/roles.fixture.json`, generated from the catalogue: `python -m scripts.gen_frontend_roles`).

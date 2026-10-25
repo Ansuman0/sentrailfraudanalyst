@@ -108,6 +108,10 @@ def create_demo_user(org, role_id, email, name, role, demo_pw):
 
 def seed_demo():
     demo_pw = os.environ.get("SEED_DEMO_PASSWORD") or getpass.getpass("Password for all demo users (14+ characters): ")
+    # Demo only: nobody is forced through two-factor at first sign-in; everyone can turn it on later from My account.
+    # (A real environment keeps the platform setting require_two_factor_admins on: Tenant admins and platform staff must use it.)
+    with pg.tx(platform=True) as cur:
+        cur.execute("UPDATE platform_settings SET require_two_factor_admins=false")
     print("\nPlatform team")
     for email, name, role in DEMO_PLATFORM_STAFF:
         if exists(email) and "--replace" in sys.argv:
@@ -134,7 +138,6 @@ def seed_demo():
             if t["sso_domain"]:   # demo only: real tenants prove the domain with a DNS TXT record (/admin/sso/verify)
                 cur.execute("UPDATE organizations SET sso_domain=%s, sso_idp_alias=%s, sso_enforced=true WHERE id=%s",
                             (t["sso_domain"], t["idp_alias"], org))
-            cur.execute("UPDATE security_settings SET mfa_required=true WHERE org_id=%s", (org,))   # demo users set up two-factor at first sign-in
             audit.write(cur, org, None, "operator", "demo_tenant_seeded", t["name"], {})
         print(f"\n{t['name']} ({t['env']})  org_id={org}")
         for email, name, role in t["users"]:
@@ -145,8 +148,7 @@ def seed_demo():
                     cur.execute("""INSERT INTO alerts (id, org_id, customer_id, score, band, reasons, channel)
                                    VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                                 (aid, org, cid, score, band, json.dumps([{"source": "rule", "text": reason}]), ch))
-    if AUTH_MODE == "keycloak":
-        print("\nDemo users sign in with the demo password and set up two-factor at first sign-in.")
+    print("Demo users sign in with the demo password. Two-factor is optional: each person turns it on from My account.")
 
 
 if __name__ == "__main__":

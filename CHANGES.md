@@ -5,6 +5,8 @@ a developer machine. Backend: 160 checks, frontend: 23 tests, all passing. See [
 
 ## Changed
 
+- **Two-factor for administrators is a setting**: owners can decide on the Security baseline screen whether Tenant admins and platform staff must set up two-factor before using the app (on by default; turning it off needs a second owner's approval). Demo environments turn it off so people sign in straight away and turn two-factor on later from My account.
+
 - **Access model v2 is complete (in progress, not released)**: the new access model is now the only one. People belong to organizations through memberships (one person can work for several), the temporary switch and the old permission names are gone, suspending someone in one organization no longer signs them out of the others, and the Security screen lets an administrator choose how Sentrail staff may enter the organization. For whoever deploys it: [docs/CUTOVER.md](docs/CUTOVER.md) (rehearse on a copy, steps, rollback) and [docs/RUNBOOK_ACCESS.md](docs/RUNBOOK_ACCESS.md) (break-glass, owner access, recovery).
 
 - **Admin screens and teams (access model v2, in progress, not released)**: every role now has the screens it needs and sees only those: access reviews, platform access requests, a list of what each person can do, "Preview as role" for administrators, warnings when a role combines duties that should be separate (for example drafting and approving reports), signed audit exports, API key expiry and rotation, and for platform staff: creating organizations, suspending or deleting them (a second owner approves deletions), staff, approvals and tenant access sessions. Teams and queues are optional (off by default). See [docs/IDENTITY.md](docs/IDENTITY.md).

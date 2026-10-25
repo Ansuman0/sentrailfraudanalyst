@@ -123,7 +123,7 @@ describe("Organizations: plan", () => {
 describe("Platform security baseline", () => {
   const BASE = {
     min_password_len_floor: 14, max_idle_timeout_min: 30, max_session_hours: 8, retention_years_floor: 5,
-    passkeys_allowed: false, platform_staff_passkey_only: false, allowed_regions: ["ca-central", "eu-west"],
+    passkeys_allowed: false, require_two_factor_admins: true, platform_staff_passkey_only: false, allowed_regions: ["ca-central", "eu-west"],
     mfa: "Always required for platform staff and organization admins.",
   };
 
@@ -146,8 +146,21 @@ describe("Platform security baseline", () => {
     // a partial body would reset max_session_hours, passkeys and regions to the API's defaults
     expect(calls.find((c) => c.method === "PUT")!.body).toEqual({
       min_password_len_floor: 16, max_idle_timeout_min: 30, retention_years_floor: 5,
-      max_session_hours: 8, passkeys_allowed: false, platform_staff_passkey_only: false, allowed_regions: ["ca-central", "eu-west"],
+      max_session_hours: 8, passkeys_allowed: false, require_two_factor_admins: true, platform_staff_passkey_only: false,
+      allowed_regions: ["ca-central", "eu-west"],
     });
+  });
+
+  it("lets an owner switch off mandatory two-factor for administrators (a loosening a second owner approves)", async () => {
+    const calls = stubApi(platformMe(["platform.security.manage"]), {
+      "GET /platform/security": () => json(200, BASE),
+      "PUT /platform/security": () => json(200, { approval_id: "a1", status: "pending" }),
+    });
+    renderAt("/platform-security");
+    fireEvent.click(await screen.findByLabelText(/Require two-factor for administrators and platform staff/));
+    fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply to all organizations" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")!.body).toMatchObject({ require_two_factor_admins: false, max_session_hours: 8 }));
   });
 
   it("is hidden from staff without the permission and shows the API's refusal", async () => {

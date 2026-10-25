@@ -235,6 +235,9 @@ ok(q("SELECT status, session_version FROM session_user_lookup(%s)", people["plat
 
 # ---- down ----
 r = migrate("--down")
+ok(r.returncode == 0 and "reverted 019_two_factor_for_admins_setting.sql" in r.stdout and q("SELECT count(*) FROM information_schema.columns WHERE table_name='platform_settings' AND column_name='require_two_factor_admins'")[0][0] == 0,
+   "migration 019 reverts first")
+r = migrate("--down")
 ok(r.returncode == 0 and "reverted 018_drop_user_role_column.sql" in r.stdout and q("SELECT count(*) FROM information_schema.columns WHERE table_name='users' AND column_name='role_id'")[0][0] == 1
    and q("SELECT count(*) FROM users WHERE role_id IS NULL")[0][0] == 0, "migration 018 reverts first: users.role_id is back, filled from the memberships")
 r = migrate("--down")
@@ -281,7 +284,7 @@ ok(q("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")[0][0
 
 # ---- up again ----
 r = migrate()
-ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout and "applied 017_drop_permission_aliases.sql" in r.stdout and "applied 018_drop_user_role_column.sql" in r.stdout, "migrations 009 to 018 apply again after a revert")
+ok(r.returncode == 0 and "applied 009_access_model_v2.sql" in r.stdout and "applied 010_sessions_and_devices.sql" in r.stdout and "applied 011_row_level_security_v2.sql" in r.stdout and "applied 012_tenant_lifecycle.sql" in r.stdout and "applied 013_owner_access_and_break_glass.sql" in r.stdout and "applied 014_authentication_enforcement.sql" in r.stdout and "applied 015_governance_and_data_controls.sql" in r.stdout and "applied 016_teams.sql" in r.stdout and "applied 017_drop_permission_aliases.sql" in r.stdout and "applied 018_drop_user_role_column.sql" in r.stdout and "applied 019_two_factor_for_admins_setting.sql" in r.stdout, "migrations 009 to 019 apply again after a revert")
 again = effective()
 ok({k: v for k, v in again.items() if k in before and label[k] in lost} != {} and
    all(again[u] >= {rename.get(p, p) for p in before[u]} - lost.get(label[u], set()) for u in before),

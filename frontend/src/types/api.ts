@@ -198,6 +198,7 @@ export interface PlatformSecurity {
   max_session_hours: number;
   retention_years_floor: number;
   passkeys_allowed: boolean;
+  require_two_factor_admins: boolean;
   platform_staff_passkey_only: boolean;
   allowed_regions: string[];
   mfa: string;

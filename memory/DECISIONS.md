@@ -52,6 +52,9 @@ Status: accepted. Unreachable chain data or OFAC list → `hold`.
 ## Decision: Plain-script backend tests on a throwaway DB (`sentrail_test`)
 Status: accepted. No pytest migration planned; frontend uses Vitest.
 
+## Decision: two-factor mandate is a platform setting (2026-10-25)
+Status: accepted on the user's instruction. Supersedes the "Tenant admins always need two-factor" rule as a hard-coded behaviour: it stays the default (`require_two_factor_admins` = true) and can be relaxed by owners with a second owner's approval; the demo seed relaxes it. Owners themselves were never forced.
+
 ## Decision: Phase 9 cut-over shape (access model v2)
 Status: accepted 2026-10-24 (approved with the recommended defaults). The removal steps are separate commits on the branch. Memberships (`tenant_memberships`, `platform_staff`) are the only source of role and status; `users.org_id` is kept as the home organization (row-level security and encryption context). Nothing touches the AWS database until the branch is merged after a rehearsal on a restored copy (`docs/CUTOVER.md`, `scripts/cutover_check.py`); rollback is the previous image plus the down migrations (newest first) or the snapshot.
 

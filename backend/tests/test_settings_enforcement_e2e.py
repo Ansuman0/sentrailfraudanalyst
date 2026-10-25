@@ -175,6 +175,36 @@ def _():
     ok(free == 200 and r.status_code == 403 and "passkey" in r.json()["detail"].lower(), "platform_staff_passkey_only: owners without a passkey can do nothing but register one")
 
 
+@covers("platform_settings.require_two_factor_admins")
+def _():
+    org, roles = fresh()
+    admin_email = f"adm2fa{counter[0]}@enforce.example.com"
+    add_user(org, roles[cat.TENANT_ADMIN], admin_email)                          # a Tenant admin who has not set up two-factor
+    sup_email = f"sup2fa{counter[0]}@enforce.example.com"
+    add_user(None, cat.PLATFORM_SUPPORT_ROLE_ID, sup_email)                       # and a platform support person
+    t_admin, t_sup = bearer(password_token(c, admin_email)), bearer(password_token(c, sup_email))
+    on = (c.get("/admin/users", headers=t_admin).status_code, c.get("/platform/orgs", headers=t_sup).status_code)
+    sql(SUPER, "UPDATE platform_settings SET require_two_factor_admins=false")
+    off = (c.get("/admin/users", headers=t_admin).status_code, c.get("/platform/orgs", headers=t_sup).status_code)
+    mf = c.get("/me", headers=t_admin).json()["mfa_setup"]
+    sql(SUPER, "UPDATE platform_settings SET require_two_factor_admins=true")
+    ok(on == (403, 403) and off == (200, 200) and mf == "optional",
+       f"require_two_factor_admins: on = admins and staff can't work until two-factor is set up {on}; off = they work and may turn it on later {off}")
+    o1 = add_user(None, cat.PLATFORM_OWNER_ROLE_ID, f"own1-2fa{counter[0]}@enforce.example.com")
+    add_user(None, cat.PLATFORM_OWNER_ROLE_ID, f"own2-2fa{counter[0]}@enforce.example.com")
+    h1 = bearer(password_token(c, f"own1-2fa{counter[0]}@enforce.example.com"))
+    h2 = bearer(password_token(c, f"own2-2fa{counter[0]}@enforce.example.com"))
+    cur_settings = c.get("/platform/security", headers=h1).json()
+    cur_settings.pop("mfa")
+    r = c.put("/platform/security", headers=h1, json={**cur_settings, "require_two_factor_admins": False})
+    still = sql(SUPER, "SELECT require_two_factor_admins FROM platform_settings")[0][0]
+    aid = r.json().get("approval_id")
+    ok(r.status_code == 200 and aid and still is True, "turning it off is a loosening: parked until a second owner approves, not applied")
+    c.post(f"/platform/approvals/{aid}/approve", headers=h2)
+    ok(sql(SUPER, "SELECT require_two_factor_admins FROM platform_settings")[0][0] is False, "the second owner approves and it takes effect")
+    sql(SUPER, "UPDATE platform_settings SET require_two_factor_admins=true")
+
+
 @covers("platform_settings.allowed_regions")
 def _():
     email = f"owner-reg{counter[0]}@enforce.example.com"

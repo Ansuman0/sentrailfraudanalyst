@@ -79,7 +79,7 @@ first, 018 down to 009), `cutover_check` is not expected to pass on an old schem
 6. Demo people: the common demo password is in `.demo-credentials.txt` (git-ignored, not on the server). Apply it with
    `docker compose ... exec -T -e SEED_DEMO_PASSWORD=<the password> api python -m scripts.seed --demo --replace` (the secret needs `ENV=dev`
    for demo seeding). `--replace` deletes the existing demo people (and their Keycloak users in Keycloak mode) and creates them again with that
-   password and the same roles; the organizations and their data stay. Everyone except the platform owner sets up two-factor at first sign-in.
+   password and the same roles; the organizations and their data stay. The demo seed switches the platform setting `require_two_factor_admins` off, so nobody is forced through two-factor at first sign-in; each person turns it on from My account. (A real environment keeps it on: [IDENTITY.md](IDENTITY.md).)
    If you also choose `AUTH_MODE=local`, set it in Secrets Manager and redeploy before running this.
 
 ## Backing out

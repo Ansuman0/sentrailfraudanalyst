@@ -4,12 +4,13 @@ import { ErrorBox, Loading, PageHeader } from "../components/common";
 import { platform } from "../services/sentrail";
 import type { PlatformSecurity as Settings } from "../types/api";
 
-interface Form { min_password_len_floor: string; max_idle_timeout_min: string; retention_years_floor: string }
+interface Form { min_password_len_floor: string; max_idle_timeout_min: string; retention_years_floor: string; require_two_factor_admins: boolean }
 
 const toForm = (s: Settings): Form => ({
   min_password_len_floor: String(s.min_password_len_floor),
   max_idle_timeout_min: String(s.max_idle_timeout_min),
   retention_years_floor: String(s.retention_years_floor),
+  require_two_factor_admins: s.require_two_factor_admins ?? true,
 });
 
 /**
@@ -29,6 +30,7 @@ export function PlatformSecurity() {
       retention_years_floor: Number(form!.retention_years_floor),
       max_session_hours: s.max_session_hours,
       passkeys_allowed: s.passkeys_allowed,
+      require_two_factor_admins: form!.require_two_factor_admins,
       platform_staff_passkey_only: s.platform_staff_passkey_only,
       allowed_regions: s.allowed_regions,
     }),
@@ -41,7 +43,8 @@ export function PlatformSecurity() {
   const s = q.data;
   const changed = toForm(s).min_password_len_floor !== form.min_password_len_floor
     || toForm(s).max_idle_timeout_min !== form.max_idle_timeout_min
-    || toForm(s).retention_years_floor !== form.retention_years_floor;
+    || toForm(s).retention_years_floor !== form.retention_years_floor
+    || toForm(s).require_two_factor_admins !== form.require_two_factor_admins;
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) => { setConfirming(false); setForm({ ...form, [k]: e.target.value }); };
   const onSubmit = (e: FormEvent) => { e.preventDefault(); setConfirming(true); };
 
@@ -66,6 +69,15 @@ export function PlatformSecurity() {
             <small>5 to 15.</small>
           </div>
         </div>
+        <label className="toggle">
+          <input type="checkbox" checked={form.require_two_factor_admins}
+                 onChange={(e) => { setConfirming(false); setForm({ ...form, require_two_factor_admins: e.target.checked }); }} />
+          <span>
+            <b>Require two-factor for administrators and platform staff</b><br />
+            <span className="muted">On (recommended): Tenant admins and platform staff (except the owner) must set it up before they can use the app.
+            Off: they can turn it on later from My account. Turning it off needs a second owner's approval.</span>
+          </span>
+        </label>
         {save.isError && <ErrorBox error={save.error} />}
         {confirming && (
           <div className="alertbox" role="alert" aria-label="Confirm baseline change">

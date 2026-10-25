@@ -146,8 +146,8 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
         cur.execute("SELECT mfa_mandatory, must_rotate, break_glass FROM users WHERE id=%s", (c["sub"],))        # their own row: always readable to them
         own = cur.fetchone() or (False, False, False)
         mandatory, must_rotate, break_glass = bool(own[0]), bool(own[1]), bool(own[2])
-        cur.execute("SELECT passkeys_allowed, platform_staff_passkey_only FROM platform_settings")
-        passkeys_allowed, passkey_only = cur.fetchone()
+        cur.execute("SELECT passkeys_allowed, platform_staff_passkey_only, require_two_factor_admins FROM platform_settings")
+        passkeys_allowed, passkey_only, admins_must = cur.fetchone()
         n_pk = passkeys.count(cur, c["sub"]) if passkeys_allowed else 0
         is_owner = str(user_role_id) == catalogue.PLATFORM_OWNER_ROLE_ID
         must_enroll = bool(passkeys_allowed and passkey_only and is_owner and not break_glass and n_pk == 0)
@@ -206,10 +206,11 @@ def signed_in_user(request: Request, cred: HTTPAuthorizationCredentials | None =
             allow, org_requires = (r[0], r[1]) if r else ([], False)
     if allow and (ip is None or not any(ipaddress.ip_address(ip) in ipaddress.ip_network(str(n)) for n in allow)):
         raise HTTPException(403, "Access isn't allowed from this network")
-    if mandatory or (c["org"] and row[2] == catalogue.TENANT_ADMIN):
+    if admins_must and (mandatory or (c["org"] and row[2] == catalogue.TENANT_ADMIN)):
         org_requires = True       # every Tenant admin (the role holds every tenant permission): two-factor is not optional for them
-    if not c["org"] and row[2] != "Platform owner":
-        org_requires = True     # platform staff (admin, support, auditor) must use two-factor; the owner (break-glass login) may skip it
+    if admins_must and not c["org"] and row[2] != "Platform owner":
+        org_requires = True     # platform staff (support, auditor ...) must use two-factor; the owner (break-glass login) may skip it
+    # (the platform setting require_two_factor_admins, on by default, can relax both; an organization's own mfa_required still applies)
     perms = set(row[3])
     mfa_used = second_factor_used(c)
     has_second = bool(row[4]) or n_pk > 0          # an authenticator app or at least one passkey

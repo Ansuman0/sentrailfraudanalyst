@@ -1920,6 +1920,7 @@ class PlatformSecurityIn(BaseModel):
     max_session_hours: int = Field(12, ge=1, le=24)
     retention_years_floor: int = Field(5, ge=5, le=15)
     passkeys_allowed: bool = True
+    require_two_factor_admins: bool = True       # Tenant admins and platform staff (except the owner) must use two-factor; off = they may enable it later
     platform_staff_passkey_only: bool = False    # when on, Platform owners must use a passkey (those without one can only register one)
     allowed_regions: list[str] = ["ca-central", "ca-east"]
 
@@ -1928,10 +1929,11 @@ class PlatformSecurityIn(BaseModel):
 def get_platform_security(p: Principal = Depends(require("platform.security.manage"))):
     with pg.tx(platform=True) as cur:
         cur.execute("""SELECT min_password_len_floor, max_idle_timeout_min, max_session_hours, retention_years_floor,
-                              passkeys_allowed, platform_staff_passkey_only, allowed_regions FROM platform_settings""")
+                              passkeys_allowed, require_two_factor_admins, platform_staff_passkey_only, allowed_regions FROM platform_settings""")
         out = dict(zip(PlatformSecurityIn.model_fields, cur.fetchone()))
-    out["mfa"] = ("Each person chooses to turn it on from My account. An organization can make it mandatory for its users; "
-                  "without it nobody can approve STRs, export cases, change policy or override screening.")
+    out["mfa"] = ("Each person chooses to turn it on from My account. An organization can make it mandatory for its users"
+                  + ("; Tenant admins and platform staff must always use it" if out["require_two_factor_admins"] else "; for Tenant admins and platform staff it is optional too (a setting here)")
+                  + ". Without it nobody can approve STRs, export cases, change policy or override screening.")
     return out
 
 
@@ -1941,7 +1943,7 @@ def set_platform_security(body: PlatformSecurityIn, p: Principal = Depends(requi
     passkeys no longer required) is parked until a second owner approves it."""
     with pg.tx(platform=True, actor=p.actor) as cur:
         cur.execute("""SELECT min_password_len_floor, max_idle_timeout_min, max_session_hours, retention_years_floor,
-                              passkeys_allowed, platform_staff_passkey_only, allowed_regions FROM platform_settings""")
+                              passkeys_allowed, require_two_factor_admins, platform_staff_passkey_only, allowed_regions FROM platform_settings""")
         old = dict(zip(PlatformSecurityIn.model_fields, cur.fetchone()))
         new = body.model_dump()
         looser = _baseline_loosens(old, new)
@@ -2106,15 +2108,16 @@ def _baseline_loosens(old: dict, new: dict) -> list[str]:
     if new["max_session_hours"] > old["max_session_hours"]: out.append("longer sessions")
     if new["retention_years_floor"] < old["retention_years_floor"]: out.append("shorter retention")
     if old["platform_staff_passkey_only"] and not new["platform_staff_passkey_only"]: out.append("passkeys no longer required for staff")
+    if old["require_two_factor_admins"] and not new["require_two_factor_admins"]: out.append("two-factor no longer required for administrators")
     if set(new["allowed_regions"]) - set(old["allowed_regions"]): out.append("more data regions")
     return out
 
 
 def _apply_baseline(cur, p: Principal, body: dict, extra: dict | None = None):
     cur.execute("""UPDATE platform_settings SET min_password_len_floor=%s, max_idle_timeout_min=%s, max_session_hours=%s,
-                   retention_years_floor=%s, passkeys_allowed=%s, platform_staff_passkey_only=%s, allowed_regions=%s,
-                   updated_at=now()""", (body["min_password_len_floor"], body["max_idle_timeout_min"], body["max_session_hours"],
-                                         body["retention_years_floor"], body["passkeys_allowed"],
+                   retention_years_floor=%s, passkeys_allowed=%s, require_two_factor_admins=%s, platform_staff_passkey_only=%s,
+                   allowed_regions=%s, updated_at=now()""", (body["min_password_len_floor"], body["max_idle_timeout_min"], body["max_session_hours"],
+                                         body["retention_years_floor"], body["passkeys_allowed"], body["require_two_factor_admins"],
                                          body["platform_staff_passkey_only"], body["allowed_regions"]))
     # bring every tenant up to the new baseline; tenants that are already stricter keep their settings
     cur.execute("""UPDATE security_settings SET min_password_len = GREATEST(min_password_len, %s),
